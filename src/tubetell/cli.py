@@ -21,6 +21,7 @@ import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
+from google.genai import errors as genai_errors
 
 from . import TubetellError, __version__
 from .gemini import MODE_PROMPTS, comments_body, generate, make_client, video_contents
@@ -64,6 +65,8 @@ def main() -> None:
         )
     except TubetellError as exc:
         sys.exit(str(exc))
+    except genai_errors.APIError as exc:  # 4xx: bad project, missing API, no access
+        sys.exit(f"Vertex AI error {exc.code}: {exc.message}")
 
     if args.out:
         Path(args.out).write_text(result + "\n", encoding="utf-8")
