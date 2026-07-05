@@ -58,7 +58,8 @@ def fetch_comments(url: str, limit: int) -> tuple[str, int]:
         data = _get("commentThreads", params, key)
         for it in data.get("items", []):
             top = it["snippet"]["topLevelComment"]["snippet"]
-            text = (top.get("textDisplay") or "").replace("\n", " ").strip()
+            # textOriginal is plain text; textDisplay falls back but carries HTML (<br>).
+            text = (top.get("textOriginal") or top.get("textDisplay") or "").replace("\n", " ").strip()
             likes = top.get("likeCount", 0)
             lines.append(f"{len(lines) + 1}. ({likes} likes) {text}")
             if len(lines) >= limit:

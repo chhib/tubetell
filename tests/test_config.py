@@ -18,7 +18,15 @@ def test_load_api_key_requires_key(monkeypatch):
 
 
 def _thread(text, likes):
-    return {"snippet": {"topLevelComment": {"snippet": {"textDisplay": text, "likeCount": likes}}}}
+    return {"snippet": {"topLevelComment": {"snippet": {"textOriginal": text, "likeCount": likes}}}}
+
+
+def test_fetch_comments_falls_back_to_html_text(monkeypatch):
+    monkeypatch.setenv("YOUTUBE_API_KEY", "k")
+    page = {"items": [{"snippet": {"topLevelComment": {"snippet": {"textDisplay": "hi", "likeCount": 1}}}}]}
+    monkeypatch.setattr("tubetell.youtube._get", lambda e, p, k: page)
+    block, n = fetch_comments("vOVKnYoH1p4", limit=5)
+    assert block == "1. (1 likes) hi"
 
 
 def test_fetch_comments_paginates_and_numbers(monkeypatch):
