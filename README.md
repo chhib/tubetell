@@ -89,15 +89,46 @@ against the 10k/day default quota.
 
 ## Cost
 
-Every run prints its token usage to stderr, so stdout stays clean for piping:
+**Rule of thumb: one question to one video costs about $0.006 per minute of
+video runtime.** A 17-minute video is ~$0.11 per run, an hour-long video
+~$0.37 — whichever mode you use, whatever you ask. The exception is
+`comments` mode, which never touches the video and costs about a cent
+regardless of video length.
+
+These numbers come from a real experiment, not the price list: every mode
+plus one custom prompt was run against the same 16:57 cooking video, and each
+run's token usage was recorded — [docs/example.md](docs/example.md) has all
+the commands and outputs. tubetell prints this line to stderr on every run,
+so you can watch your own spend (stdout stays clean for piping):
 
 ```
 tokens: 287,866 in + 1,534 thinking + 1,019 out = 290,419 total
 ```
 
-Vertex bills `gemini-2.5-flash` per token, with different input rates per
-modality (standard tier, as of July 2026 — check
-[current pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing)):
+### Where the money goes
+
+When Gemini "watches" a YouTube video, Vertex converts it into input tokens
+at a fixed rate — measured on this video:
+
+| | tokens per second of video |
+|---|---|
+| video frames (1 frame/s at default resolution) | 258 |
+| audio track | 25 |
+| **total** | **≈283** (≈1M tokens per hour of video) |
+
+Two consequences:
+
+- **You pay for the whole video on every run.** Vertex re-fetches and
+  re-tokenizes it each call — there is no caching. This 17-minute video is
+  ~288k input tokens every single time, whether you ask for a full transcript
+  or a yes/no answer.
+- **The answer is nearly free by comparison.** Even the 7,486-token full
+  transcript added less than 2 cents of output.
+
+Those tokens are billed at Vertex's `gemini-2.5-flash` standard-tier rates
+(as of July 2026 — check
+[current pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing)),
+and note that audio costs more than video:
 
 | | per 1M tokens |
 |---|---|
@@ -105,14 +136,11 @@ modality (standard tier, as of July 2026 — check
 | Input: **audio** | $1.00 |
 | Output (response + thinking) | $2.50 |
 
-A YouTube video tokenizes at a very predictable rate: **258 video tokens/s**
-(1 frame/s at default resolution) plus **25 audio tokens/s** ≈ 283 tokens per
-second of runtime. That makes video input cost ≈ **$0.006 per minute of
-video** (~$0.37 per hour), regardless of mode. Output adds fractions of a
-cent — even a full transcript is only a couple of cents.
+### What the experiment cost, per run
 
-Measured on the 16:57 video in [docs/example.md](docs/example.md) (input for
-every video mode is the same video: 262,386 video + 25,425 audio tokens):
+For the test video, input = 262,386 video tokens + 25,425 audio tokens
+≈ **$0.104 per run** — which is why every video mode below lands at nearly
+the same price no matter how long its answer was:
 
 | Run | Input tokens | Output tokens | Cost |
 |---|---|---|---|
@@ -122,12 +150,15 @@ every video mode is the same video: 262,386 video + 25,425 audio tokens):
 | `sentiment` | 287,858 | 499 | $0.105 |
 | `--prompt` (shopping list) | 287,833 | 2,431 | $0.110 |
 | `comments` (50 comments) | 2,013 | 5,007 | $0.013 |
-| **whole suite** | | | **≈ $0.57** |
+| **whole experiment** | | | **≈ $0.57** |
 
-`comments` mode never ingests the video, which is why it's ~8x cheaper than
-the video modes despite using ~40x fewer tokens (its cost is nearly all
-output, billed at the higher rate). If you want several answers about the same video, one
-combined `--prompt` costs the same as one mode — the video input dominates.
+Practical upshots:
+
+- Cost scales with **video length**, not with what you ask.
+- Want several answers about one video? Bundle them into **one `--prompt`** —
+  five separate runs pay for the video five times.
+- `comments` mode reads the YouTube Data API instead of the video, so its
+  cost is a flat ~$0.01 (almost all of it output tokens).
 
 ## Troubleshooting
 
@@ -137,9 +168,8 @@ the fetch rate-limited downstream. tubetell backs off and retries (4s → 8s →
 16s) automatically; if it still fails, wait a minute and retry, or try a
 different video. Switching regions does not help.
 
-**Long videos.** Cost and latency scale with video length (≈283 tokens per
-second of video — see [Cost](#cost)). If you want several answers about the
-same video, one combined `--prompt` is cheaper than running multiple modes.
+**Long videos.** Cost and latency scale with video length, not with the
+question — see [Cost](#cost).
 
 **Private/unlisted videos** can't be analyzed — Vertex fetches the video
 server-side and only public videos are supported.
