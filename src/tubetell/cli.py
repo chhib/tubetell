@@ -20,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 from google.genai import errors as genai_errors
 
 from . import TubetellError, __version__
@@ -53,7 +53,7 @@ def main() -> None:
     args = p.parse_args()
 
     # Picks up ./.env when present; real environment variables win.
-    load_dotenv(override=False)
+    load_dotenv(find_dotenv(usecwd=True), override=False)
 
     try:
         result = analyze(
