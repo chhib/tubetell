@@ -1,0 +1,17 @@
+# Secrets — this repo is public
+.env
+*-sa.json
+*service-account*.json
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.DS_Store

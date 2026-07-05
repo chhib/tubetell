@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tubetell"
+version = "0.1.0"
+description = "Ask Gemini anything about a YouTube video — summary, transcript, claims, sentiment, or audience comments — straight from the URL."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "David Jurelius" }]
+requires-python = ">=3.10"
+keywords = ["youtube", "gemini", "vertex-ai", "video", "transcript", "cli"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Topic :: Multimedia :: Video",
+]
+dependencies = [
+    "google-genai>=1.0",
+    "requests>=2.28",
+    "python-dotenv>=1.0",
+]
+
+[project.urls]
+Repository = "https://github.com/chhib/tubetell"
+
+[project.scripts]
+tubetell = "tubetell.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tubetell"]
