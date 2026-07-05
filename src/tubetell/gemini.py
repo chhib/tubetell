@@ -66,6 +66,21 @@ def make_client() -> genai.Client:
     return genai.Client(vertexai=True, project=project, location=location)
 
 
+def format_usage(usage) -> str | None:
+    """One-line token summary from a response's usage_metadata, or None."""
+    if usage is None:
+        return None
+    prompt = usage.prompt_token_count or 0
+    thoughts = getattr(usage, "thoughts_token_count", 0) or 0
+    out = usage.candidates_token_count or 0
+    total = usage.total_token_count or 0
+    parts = [f"{prompt:,} in"]
+    if thoughts:
+        parts.append(f"{thoughts:,} thinking")
+    parts.append(f"{out:,} out")
+    return f"tokens: {' + '.join(parts)} = {total:,} total"
+
+
 def generate(client: genai.Client, *, model: str, contents) -> str:
     """generate_content with backoff on transient 500/503s.
 
@@ -78,6 +93,9 @@ def generate(client: genai.Client, *, model: str, contents) -> str:
     for attempt in range(4):
         try:
             resp = client.models.generate_content(model=model, contents=contents)
+            usage = format_usage(getattr(resp, "usage_metadata", None))
+            if usage:
+                print(usage, file=sys.stderr)
             return resp.text or ""
         except genai_errors.ServerError as exc:  # 500/503 — transient
             last = exc

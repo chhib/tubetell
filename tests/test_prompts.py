@@ -4,7 +4,7 @@ import pytest
 from google.genai import errors as genai_errors
 
 from tubetell import TubetellError
-from tubetell.gemini import comments_body, generate, video_contents
+from tubetell.gemini import comments_body, format_usage, generate, video_contents
 
 
 def test_comments_body_preset_carries_count_and_hard_rules():
@@ -28,6 +28,43 @@ def test_video_contents_wraps_url_as_filedata():
     assert file_part.file_data.file_uri == "https://youtu.be/vOVKnYoH1p4"
     assert file_part.file_data.mime_type == "video/*"
     assert text_part.text == "Summarize this."
+
+
+def test_format_usage_includes_thinking_when_present():
+    usage = SimpleNamespace(
+        prompt_token_count=121_434,
+        thoughts_token_count=1_230,
+        candidates_token_count=456,
+        total_token_count=123_120,
+    )
+    assert format_usage(usage) == "tokens: 121,434 in + 1,230 thinking + 456 out = 123,120 total"
+
+
+def test_format_usage_omits_zero_thinking_and_handles_none_counts():
+    usage = SimpleNamespace(
+        prompt_token_count=100,
+        thoughts_token_count=None,
+        candidates_token_count=20,
+        total_token_count=120,
+    )
+    assert format_usage(usage) == "tokens: 100 in + 20 out = 120 total"
+    assert format_usage(None) is None
+
+
+def test_generate_prints_usage_to_stderr(capsys):
+    resp = SimpleNamespace(
+        text="ok",
+        usage_metadata=SimpleNamespace(
+            prompt_token_count=10,
+            thoughts_token_count=0,
+            candidates_token_count=5,
+            total_token_count=15,
+        ),
+    )
+    models = SimpleNamespace(generate_content=lambda *, model, contents: resp)
+    client = SimpleNamespace(models=models)
+    assert generate(client, model="m", contents="c") == "ok"
+    assert "tokens: 10 in + 5 out = 15 total" in capsys.readouterr().err
 
 
 class FlakyModels:
