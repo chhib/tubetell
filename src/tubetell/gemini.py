@@ -45,7 +45,11 @@ COMMENTS_PROMPT = (
     "summarize the comments present. Otherwise give: the rough split (positive / "
     "negative / neutral as approximate %), recurring themes, the most common praise "
     "and criticism, and any notably controversial reactions, each backed by a verbatim "
-    "quote.\n\n--- COMMENTS ({n} total) ---\n"
+    "quote. Quote comments as plain list items — no label or prefix like "
+    "'Verbatim Quote:' before them. For example:\n"
+    '- "This has quickly become my favourite cooking channel."\n'
+    'not:\n- Verbatim Quote: "This has quickly become my favourite cooking channel."'
+    "\n\n--- COMMENTS ({n} total) ---\n"
 )
 
 
