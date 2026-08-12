@@ -131,11 +131,14 @@ def _proxy_path(src: Path, width: int, fps: float, clip: tuple[int, int] | None)
     """A cache path keyed by the source's identity and the proxy settings.
 
     Iterating on prompts against one video is the normal case, so a proxy is
-    transcoded once and reused until the file itself changes.
+    transcoded once and reused until the file itself changes. Identity is the
+    inode rather than the path, so a moved file — or the same file reached
+    through a differently-cased path on macOS — still hits its proxy.
     """
     stat = src.stat()
     key = "|".join(
-        str(x) for x in (src.resolve(), stat.st_size, int(stat.st_mtime), width, fps, clip)
+        str(x)
+        for x in (stat.st_dev, stat.st_ino, stat.st_size, int(stat.st_mtime), width, fps, clip)
     )
     digest = hashlib.sha256(key.encode()).hexdigest()[:12]
     return _cache_dir() / f"{src.stem[:40]}-{digest}.mp4"

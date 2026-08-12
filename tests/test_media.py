@@ -183,6 +183,7 @@ def test_a_proxy_is_transcoded_once_and_reused(tmp_path, monkeypatch):
 
     source_part(str(clip))
     source_part(str(clip))
+    source_part(str(clip).replace("/game.mov", "/./game.mov"))
 
     assert calls == [1280]
 
