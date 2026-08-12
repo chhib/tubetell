@@ -1,6 +1,7 @@
 # tubetell
 
-Ask Gemini anything about a YouTube video — straight from the URL.
+Ask Gemini anything about a video — a YouTube URL, a `gs://` object, or a file
+on your disk.
 
 Gemini on Vertex AI ingests the video itself (no download, no transcription
 step) and answers a prompt about the content: what's said, what's shown, what's
@@ -13,6 +14,9 @@ tubetell <url> --mode transcript --out transcript.md
 tubetell <url> --mode claims --model gemini-2.5-pro
 tubetell <url> --mode comments --max-comments 100
 tubetell <url> --prompt "What products are recommended, and by whom?"
+
+tubetell ~/screen-recording.mov --prompt "What did I click, and when?"
+tubetell gameplay.mov --fps 2 --clip 1:30-2:45
 ```
 
 ## Modes
@@ -33,6 +37,59 @@ plus a custom prompt on one video, with real outputs and token counts.
 The `comments` prompt is hardened against hallucination: quotes must be
 verbatim from the fetched comments, and small samples are summarized without
 invented percentage splits.
+
+## Sources
+
+| Source | Example | How it travels |
+|---|---|---|
+| YouTube | `https://youtu.be/vOVKnYoH1p4`, `vOVKnYoH1p4` | a URL Vertex fetches itself (public videos only) |
+| Cloud Storage | `gs://my-bucket/clip.mp4` | a URI Vertex reads from the bucket |
+| Local file | `~/recording.mov`, `clip.mp4` | proxied by ffmpeg, then sent inline |
+
+Local video and audio both work — `.mov`, `.mp4`, `.webm`, `.mkv`, `.avi`,
+`.mpeg`, `.flv`, `.wmv`, `.3gp`, `.mp3`, `.wav`, `.m4a`, `.aac`, `.ogg`,
+`.flac`. Only `--mode comments` is YouTube-only; it reads a comment section,
+which a local file doesn't have.
+
+### Local files: the proxy
+
+A request can only carry about 12 MiB of media, and a phone or screen recording
+is usually far bigger — so anything over the cap is re-encoded first, to 1280px
+wide at 2 fps (H.264/AAC). That is not much of a compromise: Gemini samples
+video at roughly 1 frame per second and downscales it anyway, so a 120 fps
+retina capture spends its bytes on detail the model never sees. A 3-minute,
+322 MB screen recording becomes a 2.3 MB proxy.
+
+Proxies are cached in your temp directory, keyed by the file's size and mtime,
+so iterating on prompts against one video only transcodes once. This needs
+`ffmpeg` on PATH (`brew install ffmpeg`).
+
+```bash
+tubetell clip.mov --width 1920        # sharper proxy, bigger request
+tubetell clip.mov --no-transcode      # send as-is; fails if over ~12 MiB
+```
+
+If even the coarsest proxy won't fit — an hour of footage, say — tubetell says
+so and tells you to work in pieces with `--clip`.
+
+### Framing what Gemini looks at
+
+Both work with every source, and both move the bill:
+
+```bash
+tubetell <source> --clip 1:30-2:45   # only this span (ss, mm:ss, hh:mm:ss)
+tubetell <source> --fps 2            # frames per second to look at
+```
+
+`--fps` defaults to Gemini's own ~1/s. Raise it for fast-moving footage, lower
+it (`--fps 0.5`) to halve the video tokens on something slow.
+
+There is no resolution knob, because for video there is nothing to turn:
+`gemini-2.5-flash` accepts `MEDIA_RESOLUTION_HIGH` only for single images and
+rejects the request outright for video. Small on-screen text still reads
+surprisingly well at the default — but when it doesn't, the fix is to crop the
+region you care about before handing the file over, not to send more pixels of
+the whole frame.
 
 ## Install
 
@@ -159,6 +216,13 @@ Practical upshots:
   five separate runs pay for the video five times.
 - `comments` mode reads the YouTube Data API instead of the video, so its
   cost is a flat ~$0.01 (almost all of it output tokens).
+- **Local files are re-tokenized every run too.** The proxy saves upload time
+  and request size, not tokens — a 1280px frame and a 4K frame cost the same.
+  The levers that cut the bill are `--clip` (pay for less runtime) and
+  `--fps 0.5` (pay for fewer frames). A silent video also skips the audio
+  tokens, which are the expensive kind: a 3:01 screen recording with no audio
+  track came to 46,871 input tokens at `--fps 1` — 259 per second of video,
+  matching the rate measured above — or about $0.014 of input per run.
 
 ## Troubleshooting
 
@@ -168,11 +232,25 @@ the fetch rate-limited downstream. tubetell backs off and retries (4s → 8s →
 16s) automatically; if it still fails, wait a minute and retry, or try a
 different video. Switching regions does not help.
 
+**`Server disconnected without sending a response.`** A transient drop while a
+request carrying inline media uploads. tubetell retries it on the same backoff
+as the 500s; if it keeps happening, wait a minute.
+
+**`the model supports HIGH media resolution only for single images`.** Nothing
+in tubetell sets per-frame resolution anymore — see
+[Framing what Gemini looks at](#framing-what-gemini-looks-at). If you see this,
+something else in your environment is setting `media_resolution`.
+
 **Long videos.** Cost and latency scale with video length, not with the
-question — see [Cost](#cost).
+question — see [Cost](#cost). A local file that no proxy can squeeze under the
+request cap has to be worked in `--clip` slices.
 
 **Private/unlisted videos** can't be analyzed — Vertex fetches the video
-server-side and only public videos are supported.
+server-side and only public videos are supported. Download it and pass the
+file instead.
+
+**`ffmpeg is not installed`.** Only local files over ~12 MiB need it:
+`brew install ffmpeg`.
 
 ## Development
 

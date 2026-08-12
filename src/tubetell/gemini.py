@@ -6,6 +6,7 @@ import os
 import sys
 import time
 
+import httpx
 from google import genai
 from google.genai import errors as genai_errors
 from google.genai import types
@@ -86,11 +87,12 @@ def format_usage(usage) -> str | None:
 
 
 def generate(client: genai.Client, *, model: str, contents) -> str:
-    """generate_content with backoff on transient 500/503s.
+    """generate_content with backoff on transient server and transport errors.
 
-    Vertex re-fetches a YouTube URL on every call; hammering the same video in a
-    short window gets it rate-limited downstream, surfaced as a 500 INTERNAL.
-    Backing off and retrying clears it.
+    Two things fail intermittently and both clear on a retry: Vertex re-fetches
+    a YouTube URL on every call, and hammering the same video in a short window
+    gets it rate-limited downstream as a 500 INTERNAL; and a request carrying
+    inline media sometimes has its connection dropped mid-upload.
     """
     delay = 4.0
     last: Exception | None = None
@@ -101,35 +103,28 @@ def generate(client: genai.Client, *, model: str, contents) -> str:
             if usage:
                 print(usage, file=sys.stderr)
             return resp.text or ""
-        except genai_errors.ServerError as exc:  # 500/503 — transient
+        except (genai_errors.ServerError, httpx.TransportError) as exc:  # transient
             last = exc
             if attempt < 3:
+                label = getattr(exc, "code", None) or type(exc).__name__
                 print(
-                    f"  transient {exc.code}; retrying in {delay:.0f}s "
+                    f"  transient {label}; retrying in {delay:.0f}s "
                     f"(attempt {attempt + 1}/3)...",
                     file=sys.stderr,
                 )
                 time.sleep(delay)
                 delay *= 2
     raise TubetellError(
-        f"Vertex kept returning a server error: {last}\n"
-        "Likely the video URL is being rate-limited from repeated fetches — "
-        "wait a minute and retry, or try a different video."
+        f"Vertex kept failing: {last}\n"
+        "For a YouTube source this is usually the URL being rate-limited from "
+        "repeated fetches; for a local file it is usually the upload being cut "
+        "off. Wait a minute and retry."
     )
 
 
-def video_contents(url: str, text: str) -> types.Content:
-    """The video-mode request: the YouTube URL as a FileData part + the prompt.
-
-    Vertex fetches and reads the video itself — no download, no transcript step.
-    """
-    return types.Content(
-        role="user",
-        parts=[
-            types.Part(file_data=types.FileData(file_uri=url, mime_type="video/*")),
-            types.Part(text=text),
-        ],
-    )
+def media_contents(part: types.Part, text: str) -> types.Content:
+    """The video-mode request: the media part (see media.py) + the prompt."""
+    return types.Content(role="user", parts=[part, types.Part(text=text)])
 
 
 def comments_body(comments: str, n: int, prompt: str | None) -> str:

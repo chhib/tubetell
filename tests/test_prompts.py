@@ -1,10 +1,13 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from google.genai import errors as genai_errors
 
 from tubetell import TubetellError
-from tubetell.gemini import comments_body, format_usage, generate, video_contents
+from google.genai import types
+
+from tubetell.gemini import comments_body, format_usage, generate, media_contents
 
 
 def test_comments_body_preset_carries_count_and_hard_rules():
@@ -22,12 +25,13 @@ def test_comments_body_custom_prompt_replaces_preset():
     assert "do not invent" not in body
 
 
-def test_video_contents_wraps_url_as_filedata():
-    content = video_contents("https://youtu.be/vOVKnYoH1p4", "Summarize this.")
+def test_media_contents_pairs_the_media_part_with_the_prompt():
+    media = types.Part(file_data=types.FileData(file_uri="https://youtu.be/x", mime_type="video/*"))
+    content = media_contents(media, "Summarize this.")
     file_part, text_part = content.parts
-    assert file_part.file_data.file_uri == "https://youtu.be/vOVKnYoH1p4"
-    assert file_part.file_data.mime_type == "video/*"
+    assert file_part is media
     assert text_part.text == "Summarize this."
+    assert content.role == "user"
 
 
 def test_format_usage_includes_thinking_when_present():
@@ -85,6 +89,23 @@ def test_generate_retries_transient_errors(monkeypatch):
     client = SimpleNamespace(models=FlakyModels(failures=2))
     assert generate(client, model="m", contents="c") == "ok"
     assert delays == [4.0, 8.0]
+
+
+def test_generate_retries_a_dropped_connection(monkeypatch):
+    monkeypatch.setattr("tubetell.gemini.time.sleep", lambda _: None)
+
+    class DroppingModels:
+        calls = 0
+
+        def generate_content(self, *, model, contents):
+            DroppingModels.calls += 1
+            if DroppingModels.calls == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            return SimpleNamespace(text="ok")
+
+    client = SimpleNamespace(models=DroppingModels())
+    assert generate(client, model="m", contents="c") == "ok"
+    assert DroppingModels.calls == 2
 
 
 def test_generate_gives_up_after_four_attempts(monkeypatch):

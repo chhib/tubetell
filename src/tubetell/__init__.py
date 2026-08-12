@@ -1,6 +1,6 @@
-"""tubetell — ask Gemini anything about a YouTube video, straight from the URL."""
+"""tubetell — ask Gemini anything about a video: YouTube, gs://, or a local file."""
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 
 class TubetellError(Exception):
