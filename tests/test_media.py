@@ -3,10 +3,12 @@ import pytest
 from tubetell import TubetellError
 from tubetell import media
 from tubetell.media import (
+    format_offset,
     looks_like_path,
     mime_type,
     parse_clip,
     parse_offset,
+    source_duration,
     source_part,
     video_metadata,
 )
@@ -219,3 +221,44 @@ def test_video_metadata_is_left_unset_when_nothing_was_asked_for():
 
 def _fail_if_called(*args, **kwargs):
     raise AssertionError("should not transcode")
+
+
+@pytest.mark.parametrize(
+    "seconds, expected",
+    [
+        (0, "0:00"),
+        (9, "0:09"),
+        (95, "1:35"),
+        (3599, "59:59"),
+        (3600, "1:00:00"),
+        (5732, "1:35:32"),
+        (5731.6, "1:35:32"),
+        (37_205, "10:20:05"),
+    ],
+)
+def test_format_offset_switches_to_hours_only_past_the_hour(seconds, expected):
+    assert format_offset(seconds) == expected
+
+
+@pytest.mark.parametrize("text", ["0:09", "1:35", "59:59", "1:00:00", "1:35:32"])
+def test_format_offset_round_trips_parse_offset(text):
+    assert format_offset(parse_offset(text)) == text
+
+
+def test_source_duration_probes_a_local_file(tmp_path, monkeypatch):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    monkeypatch.setattr(media, "probe", lambda path: {"width": 1920, "duration": 5732.0})
+    assert source_duration(str(clip)) == 5732.0
+
+
+def test_source_duration_is_none_for_a_missing_file_or_gcs_object(tmp_path):
+    assert source_duration(str(tmp_path / "gone.mp4")) is None
+    assert source_duration("gs://bucket/game.mp4") is None
+
+
+def test_source_duration_asks_youtube_for_a_remote_video(monkeypatch):
+    seen = []
+    monkeypatch.setattr(media, "fetch_duration", lambda url: seen.append(url) or 1234.0)
+    assert source_duration("https://youtu.be/vOVKnYoH1p4") == 1234.0
+    assert seen == ["https://youtu.be/vOVKnYoH1p4"]

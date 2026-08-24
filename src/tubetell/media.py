@@ -20,7 +20,7 @@ from pathlib import Path
 from google.genai import types
 
 from . import TubetellError
-from .youtube import video_id
+from .youtube import fetch_duration, video_id
 
 # Vertex caps a generateContent request at 20 MB and inline bytes are
 # base64-encoded on the wire (+33%), so 12 MiB of media is the most that
@@ -88,6 +88,16 @@ def parse_offset(text: str) -> int:
     for p in parts:
         seconds = seconds * 60 + float(p)
     return int(seconds)
+
+
+def format_offset(seconds: float) -> str:
+    """Seconds as `mm:ss`, or `h:mm:ss` once past the hour — parse_offset's inverse."""
+    total = int(round(seconds))
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
 
 
 def parse_clip(text: str) -> tuple[int, int]:
@@ -231,6 +241,21 @@ def prepare_local(
         f"{path.name} won't fit in a request even at the lowest proxy settings.{span} "
         "Analyze it in pieces with --clip START-END."
     )
+
+
+def source_duration(source: str) -> float | None:
+    """Runtime of a source in seconds, or None when it can't be established.
+
+    Best effort by design: it only exists to bound the timestamps in the prompt,
+    and the video modes must keep working without ffprobe (remote source) or a
+    YouTube API key (the comments mode's key, which video modes never need).
+    """
+    if looks_like_path(source):
+        path = Path(source).expanduser()
+        return probe(path).get("duration") if path.is_file() else None
+    if source.startswith("gs://"):
+        return None
+    return fetch_duration(source)
 
 
 def source_part(

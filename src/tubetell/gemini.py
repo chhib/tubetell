@@ -12,6 +12,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 
 from . import TubetellError
+from .media import format_offset
 
 MODE_PROMPTS = {
     "summary": (
@@ -21,21 +22,36 @@ MODE_PROMPTS = {
     ),
     "transcript": (
         "Produce a transcript of this entire video with timestamps. Format every "
-        "segment on its own line as `[mm:ss] text`, attributing the speaker when "
-        "identifiable (`[mm:ss] Name: text`). Transcribe — do not summarize — and "
-        "cover the video end to end."
+        "segment on its own line as `[timestamp] text`, attributing the speaker "
+        "when identifiable (`[timestamp] Name: text`). Transcribe — do not "
+        "summarize — and cover the video end to end."
     ),
     "claims": (
         "List every concrete, checkable factual claim made in this video. For each, "
-        "give `[mm:ss]` timestamp, the claim (verbatim or close paraphrase), and who "
-        "said it. Be exhaustive and keep them in chronological order."
+        "give its timestamp, the claim (verbatim or close paraphrase), and who said "
+        "it. Be exhaustive and keep them in chronological order."
     ),
     "sentiment": (
         "Analyze the tone and sentiment of this video. Cover: the overall sentiment, "
-        "how it shifts across the runtime (mark notable shifts with `[mm:ss]`), each "
+        "how it shifts across the runtime (timestamp each notable shift), each "
         "speaker's attitude, and any emotionally charged or tense moments."
     ),
 }
+
+# Left to itself Gemini writes `mm:ss` and keeps writing it past the hour mark,
+# so a moment at 1:47:00 comes back as `47:00` or `107:00` — and it will place a
+# citation past the end of the video rather than admit it isn't sure. Every
+# video-mode request carries this rule, custom --prompt runs included.
+TIMESTAMP_RULE = (
+    "Timestamp rules — these override any format used above: write a position in "
+    "the first hour as `[mm:ss]` and a position from one hour on as `[h:mm:ss]`. "
+    "Never write `[mm:ss]` for a position past 59:59, never let the minutes field "
+    "exceed 59, and never mix the two formats in one answer. Every timestamp is an "
+    "offset from the start of the media you were given{runtime}. Do not guess, "
+    "round to a tidy-looking number, or extrapolate a position you did not "
+    "observe: where you are unsure of the position, write the point without a "
+    "timestamp instead of inventing one."
+)
 
 COMMENTS_PROMPT = (
     "You are given the COMPLETE set of comments fetched for a YouTube video — {n} "
@@ -52,6 +68,23 @@ COMMENTS_PROMPT = (
     'not:\n- Verbatim Quote: "This has quickly become my favourite cooking channel."'
     "\n\n--- COMMENTS ({n} total) ---\n"
 )
+
+
+def timestamp_rule(duration: float | None = None) -> str:
+    """The timestamp rule, bounded by the real runtime when we know it."""
+    if duration and duration > 0:
+        runtime = (
+            f", which runs {format_offset(duration)} — no timestamp may be later "
+            "than that"
+        )
+    else:
+        runtime = ", and no timestamp may be later than its end"
+    return TIMESTAMP_RULE.format(runtime=runtime)
+
+
+def video_body(text: str, duration: float | None = None) -> str:
+    """A video-mode prompt — preset or custom — with the timestamp rule appended."""
+    return f"{text}\n\n{timestamp_rule(duration)}"
 
 
 def make_client() -> genai.Client:

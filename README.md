@@ -24,15 +24,24 @@ tubetell gameplay.mov --fps 2 --clip 1:30-2:45
 | Mode | What you get |
 |------|--------------|
 | `summary` (default) | 3-sentence summary, key points, notable entities, overall tone |
-| `transcript` | full timestamped transcript, `[mm:ss]` per segment, speakers attributed |
+| `transcript` | full timestamped transcript, one line per segment, speakers attributed |
 | `claims` | every checkable factual claim with timestamp and speaker |
-| `sentiment` | how tone/sentiment shifts across the runtime, with `[mm:ss]` markers |
+| `sentiment` | how tone/sentiment shifts across the runtime, each shift timestamped |
 | `comments` | audience sentiment from top comments (reads comments, not the video) |
 
 `--prompt "..."` overrides the mode preset entirely — ask the video anything.
 
 See [docs/example.md](docs/example.md) for a worked example: all five modes
 plus a custom prompt on one video, with real outputs and token counts.
+
+Every video-mode request — preset or `--prompt` — carries a timestamp rule,
+because left alone Gemini writes `mm:ss` past the hour mark (1:47:00 comes back
+as `47:00` or `107:00`) and will cite a position past the end of the video. The
+rule pins one format per answer (`mm:ss` in the first hour, `h:mm:ss` after it)
+and tells the model to drop the timestamp rather than guess. When the runtime
+can be established — ffprobe for a local file, `videos.list` for a YouTube URL
+if `YOUTUBE_API_KEY` happens to be set — it goes in the prompt as a hard upper
+bound. Both lookups are best effort: no ffprobe or no key just means no bound.
 
 The `comments` prompt is hardened against hallucination: quotes must be
 verbatim from the fetched comments, and small samples are summarized without

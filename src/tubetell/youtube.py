@@ -40,6 +40,44 @@ def video_id(url: str) -> str:
     raise TubetellError(f"Could not extract a video id from: {url}")
 
 
+ISO_DURATION = re.compile(
+    r"^P(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?$"
+)
+
+
+def parse_iso8601_duration(text: str) -> float | None:
+    """`PT1H35M12S` as seconds — None for anything that isn't that shape.
+
+    A live or upcoming broadcast reports `P0D`, which parses to 0 and is
+    reported as None: unknown runtime, not a zero-length video.
+    """
+    m = ISO_DURATION.fullmatch(text.strip()) if text else None
+    if not m:
+        return None
+    days, hours, minutes, seconds = (float(g or 0) for g in m.groups())
+    total = days * 86400 + hours * 3600 + minutes * 60 + seconds
+    return total or None
+
+
+def fetch_duration(url: str) -> float | None:
+    """A YouTube video's runtime in seconds, or None when it can't be had.
+
+    Deliberately best effort: the video modes need no API key of their own, so a
+    missing key, an unparseable URL, or a failed call just means the prompt goes
+    out without a runtime to bound its timestamps against.
+    """
+    try:
+        key = load_api_key()
+        vid = video_id(url)
+        data = _get("videos", {"part": "contentDetails", "id": vid}, key)
+    except (TubetellError, requests.RequestException):
+        return None
+    items = data.get("items") or []
+    if not items:
+        return None
+    return parse_iso8601_duration(items[0].get("contentDetails", {}).get("duration", ""))
+
+
 def fetch_comments(url: str, limit: int) -> tuple[str, int]:
     """Top comments as a numbered text block + count, ordered by relevance."""
     key = load_api_key()

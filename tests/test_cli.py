@@ -2,6 +2,7 @@ import os
 
 import pytest
 from google.genai import errors as genai_errors
+from google.genai import types
 
 from tubetell import TubetellError
 from tubetell import cli
@@ -79,3 +80,41 @@ def test_api_error_exits_with_clean_message(tmp_path, monkeypatch):
 
     with pytest.raises(SystemExit, match="Vertex AI error 403"):
         run_main(monkeypatch, ["vOVKnYoH1p4"])
+
+def test_analyze_sends_the_prompt_with_the_timestamp_rule(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
+    monkeypatch.setattr(cli, "source_duration", lambda source: 5732.0)
+    def capture(client, *, model, contents):
+        sent["c"] = contents
+        return "ok"
+
+    monkeypatch.setattr(cli, "generate", capture)
+
+    assert cli.analyze("vOVKnYoH1p4", mode="claims", prompt=None, model="m", max_comments=0) == "ok"
+    text = sent["c"].parts[1].text
+    assert text.startswith(cli.MODE_PROMPTS["claims"])
+    assert "runs 1:35:32" in text
+
+
+def test_analyze_skips_the_runtime_when_a_clip_narrows_the_source(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
+    monkeypatch.setattr(
+        cli, "source_duration", lambda source: pytest.fail("must not probe a clipped source")
+    )
+    def capture(client, *, model, contents):
+        sent["c"] = contents
+        return "ok"
+
+    monkeypatch.setattr(cli, "generate", capture)
+
+    cli.analyze(
+        "vOVKnYoH1p4", mode="summary", prompt="Vad händer?", model="m", max_comments=0,
+        clip="1:30-2:45",
+    )
+    text = sent["c"].parts[1].text
+    assert text.startswith("Vad händer?")
+    assert "no timestamp may be later than its end" in text

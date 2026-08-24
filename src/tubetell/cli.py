@@ -6,14 +6,16 @@ transcript step); a local file is shrunk to a proxy by ffmpeg and sent inline.
 
 Modes (--mode), each a tuned prompt preset:
     summary     3-sentence summary + key points + entities + tone   (default)
-    transcript  full timestamped transcript, [mm:ss] per segment
-    claims      every concrete factual claim with its [mm:ss] and speaker
+    transcript  full timestamped transcript, one line per segment
+    claims      every concrete factual claim with its timestamp and speaker
     sentiment   how tone/sentiment shifts across the video, with markers
     comments    pulls top comments via the YouTube API, analyzes audience
                 sentiment (this mode reads comments, not the video —
                 YouTube only)
 
---prompt overrides the mode preset entirely.
+--prompt overrides the mode preset entirely. Either way the request carries a
+timestamp rule: mm:ss inside the first hour, h:mm:ss past it, and — when the
+runtime can be established — nothing cited beyond the end of the video.
 """
 
 from __future__ import annotations
@@ -26,8 +28,15 @@ from dotenv import find_dotenv, load_dotenv
 from google.genai import errors as genai_errors
 
 from . import TubetellError, __version__
-from .gemini import MODE_PROMPTS, comments_body, generate, make_client, media_contents
-from .media import looks_like_path, parse_clip, source_part
+from .gemini import (
+    MODE_PROMPTS,
+    comments_body,
+    generate,
+    make_client,
+    media_contents,
+    video_body,
+)
+from .media import looks_like_path, parse_clip, source_duration, source_part
 from .youtube import fetch_comments
 
 
@@ -52,14 +61,18 @@ def analyze(
             )
         comments, n = fetch_comments(source, max_comments)
         return generate(client, model=model, contents=comments_body(comments, n, prompt))
-    text = prompt or MODE_PROMPTS[mode]
+    span = parse_clip(clip) if clip else None
     part = source_part(
         source,
         transcode_enabled=transcode,
         width=width,
         fps=fps,
-        clip=parse_clip(clip) if clip else None,
+        clip=span,
     )
+    # A clip leaves it ambiguous whether the model counts from the clip or from
+    # the original video, so only an uncut source gets a runtime to cite against.
+    duration = None if span else source_duration(source)
+    text = video_body(prompt or MODE_PROMPTS[mode], duration)
     return generate(client, model=model, contents=media_contents(part, text))
 
 

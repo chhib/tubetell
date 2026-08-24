@@ -7,7 +7,15 @@ from google.genai import errors as genai_errors
 from tubetell import TubetellError
 from google.genai import types
 
-from tubetell.gemini import comments_body, format_usage, generate, media_contents
+from tubetell.gemini import (
+    MODE_PROMPTS,
+    comments_body,
+    format_usage,
+    generate,
+    media_contents,
+    timestamp_rule,
+    video_body,
+)
 
 
 def test_comments_body_preset_carries_count_and_hard_rules():
@@ -116,3 +124,37 @@ def test_generate_gives_up_after_four_attempts(monkeypatch):
         generate(client, model="m", contents="c")
     assert client.models.calls == 4
     assert delays == [4.0, 8.0, 16.0]
+
+
+def test_timestamp_rule_bounds_itself_by_a_known_runtime():
+    rule = timestamp_rule(5732)  # 1:35:32
+    assert "runs 1:35:32" in rule
+    assert "no timestamp may be later than that" in rule
+
+
+def test_timestamp_rule_without_a_runtime_still_bounds_the_end():
+    rule = timestamp_rule(None)
+    assert "no timestamp may be later than its end" in rule
+    assert "runs" not in rule
+    assert timestamp_rule(0) == rule  # a zero runtime is unknown, not zero-length
+
+
+def test_timestamp_rule_demands_one_format_per_answer():
+    rule = timestamp_rule(None)
+    assert "`[mm:ss]`" in rule and "`[h:mm:ss]`" in rule
+    assert "never mix the two formats" in rule
+
+
+def test_video_body_appends_the_rule_to_preset_and_custom_prompts():
+    preset = video_body(MODE_PROMPTS["claims"], 90)
+    assert preset.startswith(MODE_PROMPTS["claims"])
+    assert timestamp_rule(90) in preset
+
+    custom = video_body("Sammanfatta ur ett investerarperspektiv.", None)
+    assert custom.startswith("Sammanfatta ur ett investerarperspektiv.")
+    assert timestamp_rule(None) in custom
+
+
+def test_presets_leave_the_timestamp_format_to_the_rule():
+    for mode, prompt in MODE_PROMPTS.items():
+        assert "mm:ss" not in prompt, mode
