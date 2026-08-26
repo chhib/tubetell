@@ -113,9 +113,17 @@ Requires Python 3.10+.
 ## Setup
 
 You need a Google Cloud project with the **Vertex AI API** enabled. tubetell
-reads configuration from environment variables, or from a `.env` file in the
-directory you run it from (real environment variables win — see
+reads configuration from, in order of precedence (see
 [`.env.example`](.env.example)):
+
+1. real environment variables
+2. the nearest `.env` walking up from the directory you run it from
+3. the file named by `$TUBETELL_ENV`
+4. `~/.config/tubetell/.env` (or `$XDG_CONFIG_HOME/tubetell/.env`)
+
+Put your keys in `~/.config/tubetell/.env` once and tubetell works from any
+directory. A relative `GOOGLE_APPLICATION_CREDENTIALS` is resolved against the
+`.env` file that sets it, not the cwd.
 
 ```bash
 export GOOGLE_CLOUD_PROJECT=my-project-id

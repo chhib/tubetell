@@ -21,13 +21,14 @@ runtime can be established — nothing cited beyond the end of the video.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
-from dotenv import find_dotenv, load_dotenv
 from google.genai import errors as genai_errors
 
 from . import TubetellError, __version__
+from .config import check_credentials_file, load_env, missing_project_message
 from .gemini import (
     MODE_PROMPTS,
     comments_body,
@@ -113,9 +114,12 @@ def main() -> None:
     args = p.parse_args()
 
     # Picks up ./.env when present; real environment variables win.
-    load_dotenv(find_dotenv(usecwd=True), override=False)
+    loaded = load_env()
 
     try:
+        check_credentials_file()
+        if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
+            raise TubetellError(missing_project_message(loaded))
         result = analyze(
             args.source,
             mode=args.mode,
@@ -133,8 +137,10 @@ def main() -> None:
         sys.exit(f"Vertex AI error {exc.code}: {exc.message}")
 
     if args.out:
-        Path(args.out).write_text(result + "\n", encoding="utf-8")
-        print(f"Wrote {args.mode} output -> {args.out}", file=sys.stderr)
+        out = Path(args.out).expanduser()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(result + "\n", encoding="utf-8")
+        print(f"Wrote {args.mode} output -> {out}", file=sys.stderr)
     else:
         print(result)
 

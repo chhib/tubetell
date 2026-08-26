@@ -99,7 +99,7 @@ def make_client() -> genai.Client:
     if not project:
         raise TubetellError(
             "GOOGLE_CLOUD_PROJECT is not set. Export it, or put it in a .env file "
-            "in the directory you run tubetell from."
+            "in the directory you run tubetell from, or in ~/.config/tubetell/.env."
         )
     return genai.Client(vertexai=True, project=project, location=location)
 
