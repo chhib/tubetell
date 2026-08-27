@@ -706,10 +706,11 @@ wheels = [
 
 [[package]]
 name = "tubetell"
-version = "0.1.1"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "google-genai" },
+    { name = "httpx" },
     { name = "python-dotenv" },
     { name = "requests" },
 ]
@@ -722,6 +723,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "google-genai", specifier = ">=1.0" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "requests", specifier = ">=2.28" },
 ]

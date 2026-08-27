@@ -1,10 +1,21 @@
 from types import SimpleNamespace
 
+import httpx
 import pytest
 from google.genai import errors as genai_errors
 
 from tubetell import TubetellError
-from tubetell.gemini import comments_body, format_usage, generate, video_contents
+from google.genai import types
+
+from tubetell.gemini import (
+    MODE_PROMPTS,
+    comments_body,
+    format_usage,
+    generate,
+    media_contents,
+    timestamp_rule,
+    video_body,
+)
 
 
 def test_comments_body_preset_carries_count_and_hard_rules():
@@ -22,12 +33,13 @@ def test_comments_body_custom_prompt_replaces_preset():
     assert "do not invent" not in body
 
 
-def test_video_contents_wraps_url_as_filedata():
-    content = video_contents("https://youtu.be/vOVKnYoH1p4", "Summarize this.")
+def test_media_contents_pairs_the_media_part_with_the_prompt():
+    media = types.Part(file_data=types.FileData(file_uri="https://youtu.be/x", mime_type="video/*"))
+    content = media_contents(media, "Summarize this.")
     file_part, text_part = content.parts
-    assert file_part.file_data.file_uri == "https://youtu.be/vOVKnYoH1p4"
-    assert file_part.file_data.mime_type == "video/*"
+    assert file_part is media
     assert text_part.text == "Summarize this."
+    assert content.role == "user"
 
 
 def test_format_usage_includes_thinking_when_present():
@@ -61,7 +73,7 @@ def test_generate_prints_usage_to_stderr(capsys):
             total_token_count=15,
         ),
     )
-    models = SimpleNamespace(generate_content=lambda *, model, contents: resp)
+    models = SimpleNamespace(generate_content=lambda *, model, contents, config=None: resp)
     client = SimpleNamespace(models=models)
     assert generate(client, model="m", contents="c") == "ok"
     assert "tokens: 10 in + 5 out = 15 total" in capsys.readouterr().err
@@ -72,7 +84,7 @@ class FlakyModels:
         self.failures = failures
         self.calls = 0
 
-    def generate_content(self, *, model, contents):
+    def generate_content(self, *, model, contents, config=None):
         self.calls += 1
         if self.calls <= self.failures:
             raise genai_errors.ServerError(500, {"error": {"message": "internal"}})
@@ -87,6 +99,23 @@ def test_generate_retries_transient_errors(monkeypatch):
     assert delays == [4.0, 8.0]
 
 
+def test_generate_retries_a_dropped_connection(monkeypatch):
+    monkeypatch.setattr("tubetell.gemini.time.sleep", lambda _: None)
+
+    class DroppingModels:
+        calls = 0
+
+        def generate_content(self, *, model, contents, config=None):
+            DroppingModels.calls += 1
+            if DroppingModels.calls == 1:
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            return SimpleNamespace(text="ok")
+
+    client = SimpleNamespace(models=DroppingModels())
+    assert generate(client, model="m", contents="c") == "ok"
+    assert DroppingModels.calls == 2
+
+
 def test_generate_gives_up_after_four_attempts(monkeypatch):
     delays = []
     monkeypatch.setattr("tubetell.gemini.time.sleep", delays.append)
@@ -95,3 +124,37 @@ def test_generate_gives_up_after_four_attempts(monkeypatch):
         generate(client, model="m", contents="c")
     assert client.models.calls == 4
     assert delays == [4.0, 8.0, 16.0]
+
+
+def test_timestamp_rule_bounds_itself_by_a_known_runtime():
+    rule = timestamp_rule(5732)  # 1:35:32
+    assert "runs 1:35:32" in rule
+    assert "no timestamp may be later than that" in rule
+
+
+def test_timestamp_rule_without_a_runtime_still_bounds_the_end():
+    rule = timestamp_rule(None)
+    assert "no timestamp may be later than its end" in rule
+    assert "runs" not in rule
+    assert timestamp_rule(0) == rule  # a zero runtime is unknown, not zero-length
+
+
+def test_timestamp_rule_demands_one_format_per_answer():
+    rule = timestamp_rule(None)
+    assert "`[mm:ss]`" in rule and "`[h:mm:ss]`" in rule
+    assert "never mix the two formats" in rule
+
+
+def test_video_body_appends_the_rule_to_preset_and_custom_prompts():
+    preset = video_body(MODE_PROMPTS["claims"], 90)
+    assert preset.startswith(MODE_PROMPTS["claims"])
+    assert timestamp_rule(90) in preset
+
+    custom = video_body("Sammanfatta ur ett investerarperspektiv.", None)
+    assert custom.startswith("Sammanfatta ur ett investerarperspektiv.")
+    assert timestamp_rule(None) in custom
+
+
+def test_presets_leave_the_timestamp_format_to_the_rule():
+    for mode, prompt in MODE_PROMPTS.items():
+        assert "mm:ss" not in prompt, mode
