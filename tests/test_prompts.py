@@ -73,7 +73,7 @@ def test_generate_prints_usage_to_stderr(capsys):
             total_token_count=15,
         ),
     )
-    models = SimpleNamespace(generate_content=lambda *, model, contents: resp)
+    models = SimpleNamespace(generate_content=lambda *, model, contents, config=None: resp)
     client = SimpleNamespace(models=models)
     assert generate(client, model="m", contents="c") == "ok"
     assert "tokens: 10 in + 5 out = 15 total" in capsys.readouterr().err
@@ -84,7 +84,7 @@ class FlakyModels:
         self.failures = failures
         self.calls = 0
 
-    def generate_content(self, *, model, contents):
+    def generate_content(self, *, model, contents, config=None):
         self.calls += 1
         if self.calls <= self.failures:
             raise genai_errors.ServerError(500, {"error": {"message": "internal"}})
@@ -105,7 +105,7 @@ def test_generate_retries_a_dropped_connection(monkeypatch):
     class DroppingModels:
         calls = 0
 
-        def generate_content(self, *, model, contents):
+        def generate_content(self, *, model, contents, config=None):
             DroppingModels.calls += 1
             if DroppingModels.calls == 1:
                 raise httpx.RemoteProtocolError("Server disconnected without sending a response.")

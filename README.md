@@ -47,6 +47,25 @@ The `comments` prompt is hardened against hallucination: quotes must be
 verbatim from the fetched comments, and small samples are summarized without
 invented percentage splits.
 
+## Long videos
+
+Gemini tokenizes video at a fixed rate — roughly 258 tokens per sampled frame
+(one frame a second by default) plus 32 tokens a second of audio — so an hour of
+talking heads is ~1.05M tokens, just over the 1,048,576-token window, and Vertex
+rejects the request with "The input token count exceeds the maximum number of
+tokens allowed". When tubetell knows the runtime (ffprobe for a file,
+`videos.list` for YouTube when `YOUTUBE_API_KEY` is set) it sizes the request
+itself: first it samples frames at low resolution (66 tokens a frame — fine for
+anything where the words matter more than the pixels), and if that still won't
+fit it analyzes the video in consecutive clips. `transcript` and `claims` output
+is concatenated; every other mode gets one merge pass so you still receive a
+single answer. Without a runtime it can't plan, so the 400 comes back with a
+hint: set the key, lower `--fps`, or pass `--clip`.
+
+A response is capped at 65,535 output tokens; if an answer hits that cap
+tubetell says so on stderr rather than handing you a silently truncated
+transcript.
+
 ## Sources
 
 | Source | Example | How it travels |

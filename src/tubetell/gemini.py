@@ -70,6 +70,25 @@ COMMENTS_PROMPT = (
 )
 
 
+# Modes whose output is a chronological list: chunk answers just concatenate.
+LIST_MODES = {"transcript", "claims"}
+
+MERGE_PROMPT = (
+    "Below are {n} answers to the same request, each covering one consecutive "
+    "span of a single video (spans marked). Merge them into one answer to the "
+    "original request as if you had watched the whole video: no repetition, no "
+    "mention of the spans or of this merge step, all timestamps kept as they are.\n\n"
+    "--- ORIGINAL REQUEST ---\n{request}\n\n--- ANSWERS ---\n{answers}"
+)
+
+
+def merge_body(request: str, answers: list[tuple[tuple[int, int], str]]) -> str:
+    blocks = [
+        f"[span {format_offset(a)}-{format_offset(b)}]\n{text}" for (a, b), text in answers
+    ]
+    return MERGE_PROMPT.format(n=len(answers), request=request, answers="\n\n".join(blocks))
+
+
 def timestamp_rule(duration: float | None = None) -> str:
     """The timestamp rule, bounded by the real runtime when we know it."""
     if duration and duration > 0:
@@ -119,7 +138,33 @@ def format_usage(usage) -> str | None:
     return f"tokens: {' + '.join(parts)} = {total:,} total"
 
 
-def generate(client: genai.Client, *, model: str, contents) -> str:
+# The most a single response may run to; Gemini 2.5 caps output at 65,536.
+MAX_OUTPUT_TOKENS = 65535
+
+TOKEN_LIMIT_HINT = (
+    "The video is too long for one request at this sampling density. tubetell "
+    "sizes requests from the runtime when it can establish it — set "
+    "YOUTUBE_API_KEY so it can look the runtime up, or pass --fps 0.5 (or lower) "
+    "or analyze a span with --clip START-END."
+)
+
+
+def request_config(*, low_res: bool = False) -> types.GenerateContentConfig:
+    cfg = types.GenerateContentConfig(max_output_tokens=MAX_OUTPUT_TOKENS)
+    if low_res:
+        cfg.media_resolution = types.MediaResolution.MEDIA_RESOLUTION_LOW
+    return cfg
+
+
+def _truncated(resp) -> bool:
+    cands = getattr(resp, "candidates", None) or []
+    reason = getattr(cands[0], "finish_reason", None) if cands else None
+    return reason is not None and "MAX_TOKENS" in str(reason)
+
+
+def generate(
+    client: genai.Client, *, model: str, contents, low_res: bool = False
+) -> str:
     """generate_content with backoff on transient server and transport errors.
 
     Two things fail intermittently and both clear on a retry: Vertex re-fetches
@@ -131,11 +176,23 @@ def generate(client: genai.Client, *, model: str, contents) -> str:
     last: Exception | None = None
     for attempt in range(4):
         try:
-            resp = client.models.generate_content(model=model, contents=contents)
+            resp = client.models.generate_content(
+                model=model, contents=contents, config=request_config(low_res=low_res)
+            )
             usage = format_usage(getattr(resp, "usage_metadata", None))
             if usage:
                 print(usage, file=sys.stderr)
+            if _truncated(resp):
+                print(
+                    "  warning: the answer hit the output cap and was cut off — "
+                    "analyze a shorter span with --clip START-END for the rest.",
+                    file=sys.stderr,
+                )
             return resp.text or ""
+        except genai_errors.ClientError as exc:
+            if exc.code == 400 and "token count exceeds" in str(exc.message or exc):
+                raise TubetellError(f"Vertex AI error 400: {exc.message}\n{TOKEN_LIMIT_HINT}")
+            raise
         except (genai_errors.ServerError, httpx.TransportError) as exc:  # transient
             last = exc
             if attempt < 3:
