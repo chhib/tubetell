@@ -72,18 +72,42 @@ def analyze(
         comments, n = fetch_comments(source, max_comments)
         return generate(client, model=model, contents=comments_body(comments, n, prompt))
     span = parse_clip(clip) if clip else None
-    part = source_part(
-        source,
-        transcode_enabled=transcode,
-        width=width,
-        fps=fps,
-        clip=span,
-    )
     # A clip leaves it ambiguous whether the model counts from the clip or from
     # the original video, so only an uncut source gets a runtime to cite against.
     duration = None if span else source_duration(source)
-    text = video_body(prompt or MODE_PROMPTS[mode], duration)
-    return generate(client, model=model, contents=media_contents(part, text))
+    fit = plan(
+        (span[1] - span[0]) if span else duration,
+        fps=fps,
+        clip=span,
+    )
+    request = prompt or MODE_PROMPTS[mode]
+
+    def ask(piece: tuple[int, int] | None, runtime: float | None) -> str:
+        part = source_part(
+            source,
+            transcode_enabled=transcode,
+            width=width,
+            fps=fps,
+            clip=piece,
+        )
+        text = video_body(request, runtime)
+        return generate(
+            client, model=model, contents=media_contents(part, text), low_res=fit.low_res
+        )
+
+    if not fit.chunked:
+        return ask(span, duration)
+
+    print(
+        f"  runtime {format_offset(duration or fit.clips[-1][1])} needs "
+        f"{len(fit.clips)} requests; analyzing each span, then merging.",
+        file=sys.stderr,
+    )
+    answers = []
+    for a, b in fit.clips:
+        print(f"  span {format_offset(a)}-{format_offset(b)}", file=sys.stderr)
+        answers.append(((a, b), ask((a, b), None)))
+    return generate(client, model=model, contents=merge_body(request, answers))
 
 
 def main() -> None:

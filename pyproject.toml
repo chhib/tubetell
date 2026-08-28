@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tubetell"
-version = "0.3.0"
+version = "0.3.1"
 description = "Ask Gemini anything about a video — YouTube, a gs:// object, or a local file — for a summary, transcript, claims, sentiment, or audience comments."
 readme = "README.md"
 license = "MIT"

@@ -86,7 +86,7 @@ def test_analyze_sends_the_prompt_with_the_timestamp_rule(monkeypatch):
     monkeypatch.setattr(cli, "make_client", lambda: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
     monkeypatch.setattr(cli, "source_duration", lambda source: 5732.0)
-    def capture(client, *, model, contents):
+    def capture(client, *, model, contents, low_res=False):
         sent["c"] = contents
         return "ok"
 
@@ -105,7 +105,7 @@ def test_analyze_skips_the_runtime_when_a_clip_narrows_the_source(monkeypatch):
     monkeypatch.setattr(
         cli, "source_duration", lambda source: pytest.fail("must not probe a clipped source")
     )
-    def capture(client, *, model, contents):
+    def capture(client, *, model, contents, low_res=False):
         sent["c"] = contents
         return "ok"
 
@@ -118,3 +118,36 @@ def test_analyze_skips_the_runtime_when_a_clip_narrows_the_source(monkeypatch):
     text = sent["c"].parts[1].text
     assert text.startswith("Vad händer?")
     assert "no timestamp may be later than its end" in text
+
+
+def test_analyze_drops_resolution_for_an_hour_long_video(monkeypatch):
+    sent = {}
+    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
+    monkeypatch.setattr(cli, "source_duration", lambda source: 61 * 60.0)
+
+    def capture(client, *, model, contents, low_res=False):
+        sent["low_res"] = low_res
+        return "ok"
+
+    monkeypatch.setattr(cli, "generate", capture)
+    cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="m", max_comments=0)
+    assert sent["low_res"] is True
+
+
+def test_analyze_splits_a_very_long_video_and_merges(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text=str(kw["clip"])))
+    monkeypatch.setattr(cli, "source_duration", lambda source: 6 * 3600.0)
+
+    def capture(client, *, model, contents, low_res=False):
+        calls.append(contents)
+        return "piece"
+
+    monkeypatch.setattr(cli, "generate", capture)
+    out = cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="m", max_comments=0)
+    assert out == "piece"
+    assert len(calls) >= 3  # at least two spans plus the merge
+    assert all("None" not in c.parts[0].text for c in calls[:-1])
+    assert "--- ANSWERS ---" in calls[-1]
