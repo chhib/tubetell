@@ -9,8 +9,10 @@ from tubetell.media import (
     parse_clip,
     parse_offset,
     source_duration,
+    source_kind,
     source_part,
     video_metadata,
+    youtube_url,
 )
 
 
@@ -73,6 +75,25 @@ def test_parse_clip_requires_a_range_and_a_forward_span():
 def test_mime_type_rejects_formats_gemini_cannot_read(tmp_path):
     with pytest.raises(TubetellError, match="Unsupported file type"):
         mime_type(tmp_path / "notes.txt")
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        ("recording.mov", "local"),
+        ("gs://bucket/game.mp4", "gs"),
+        ("vOVKnYoH1p4", "youtube"),
+        ("https://youtu.be/vOVKnYoH1p4", "youtube"),
+        ("https://www.youtube.com/watch?v=vOVKnYoH1p4", "youtube"),
+    ],
+)
+def test_source_kind_classifies_local_gs_and_youtube(source, expected):
+    assert source_kind(source) == expected
+
+
+def test_youtube_url_expands_a_bare_id_and_keeps_a_full_url():
+    assert youtube_url("vOVKnYoH1p4") == "https://www.youtube.com/watch?v=vOVKnYoH1p4"
+    assert youtube_url("https://youtu.be/vOVKnYoH1p4") == "https://youtu.be/vOVKnYoH1p4"
 
 
 def test_source_part_passes_a_youtube_url_through_as_a_reference():

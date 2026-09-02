@@ -28,6 +28,9 @@ from . import TubetellError
 CREDS = "GOOGLE_APPLICATION_CREDENTIALS"
 
 
+AGENTIC_MODELS = ("gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
+
+
 def user_config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
     return Path(base) / "tubetell" / ".env"
@@ -79,10 +82,70 @@ def check_credentials_file() -> None:
         )
 
 
+def load_gemini_api_key() -> str | None:
+    return os.environ.get("GEMINI_API_KEY") or None
+
+
+def _files_read(loaded: list[Path]) -> str:
+    return ", ".join(str(p) for p in loaded) if loaded else "none found"
+
+
 def missing_project_message(loaded: list[Path]) -> str:
-    where = ", ".join(str(p) for p in loaded) if loaded else "none found"
     return (
         "GOOGLE_CLOUD_PROJECT is not set. Export it, or put it in a .env file in the "
         f"directory you run tubetell from, or in {user_config_path()} "
-        f"(config files read: {where})."
+        f"(config files read: {_files_read(loaded)})."
     )
+
+
+def missing_credentials_message(loaded: list[Path]) -> str:
+    return (
+        "Neither GEMINI_API_KEY nor GOOGLE_CLOUD_PROJECT is set. Export one of them, "
+        "or put it in a .env file in the directory you run tubetell from, or in "
+        f"{user_config_path()} (config files read: {_files_read(loaded)})."
+    )
+
+
+def _unmet_condition(
+    *, has_key: bool, model: str, source_kind: str, clip: tuple[int, int] | None, fps: float | None
+) -> str | None:
+    if not has_key:
+        return "GEMINI_API_KEY is not set"
+    if model not in AGENTIC_MODELS:
+        return f"{model} is not an agentic model (supported: {', '.join(AGENTIC_MODELS)})"
+    if source_kind == "gs":
+        return "agentic mode does not support Cloud Storage (gs://) sources"
+    if clip is not None:
+        return "--clip is static-only"
+    if fps is not None:
+        return "--fps is static-only"
+    return None
+
+
+def static_reason(
+    *, has_key: bool, model: str, source_kind: str, clip: tuple[int, int] | None, fps: float | None
+) -> str | None:
+    """Why `auto` fell back to static despite a GEMINI_API_KEY; None otherwise."""
+    if not has_key:
+        return None
+    return _unmet_condition(has_key=has_key, model=model, source_kind=source_kind, clip=clip, fps=fps)
+
+
+def resolve_processing(
+    explicit: str,
+    *,
+    has_key: bool,
+    model: str,
+    source_kind: str,
+    clip: tuple[int, int] | None,
+    fps: float | None,
+) -> str:
+    """Pick the request path: `explicit` is auto, agentic, or static."""
+    if explicit == "static":
+        return "static"
+    reason = _unmet_condition(has_key=has_key, model=model, source_kind=source_kind, clip=clip, fps=fps)
+    if reason is None:
+        return "agentic"
+    if explicit == "agentic":
+        raise TubetellError(f"--processing agentic is not possible here: {reason}.")
+    return "static"

@@ -51,6 +51,7 @@ MIME_BY_SUFFIX = {
 # the inline cap: coarser frames, then a smaller frame.
 PROXY_LADDER = ((960, 1.0), (640, 1.0), (480, 0.5))
 
+
 def is_remote(source: str) -> bool:
     """True for sources Vertex fetches itself (YouTube page, GCS object)."""
     return source.startswith(("http://", "https://", "gs://"))
@@ -67,6 +68,20 @@ def looks_like_path(source: str) -> bool:
         return False
     p = Path(source).expanduser()
     return p.exists() or "/" in source or p.suffix.lower() in MIME_BY_SUFFIX
+
+
+def source_kind(source: str) -> str:
+    """`local`, `gs`, or `youtube` — the three shapes a source can take."""
+    if looks_like_path(source):
+        return "local"
+    if source.startswith("gs://"):
+        return "gs"
+    return "youtube"
+
+
+def youtube_url(source: str) -> str:
+    """A full URL as given, or a bare video id expanded to its watch URL."""
+    return source if is_remote(source) else f"https://www.youtube.com/watch?v={video_id(source)}"
 
 
 def mime_type(path: Path) -> str:
@@ -268,7 +283,8 @@ def source_part(
     quiet: bool = False,
 ) -> types.Part:
     """The media half of the request: a URI reference or inline bytes."""
-    if looks_like_path(source):
+    kind = source_kind(source)
+    if kind == "local":
         path = Path(source).expanduser()
         if not path.exists():
             raise TubetellError(f"No such file: {source}")

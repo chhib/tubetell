@@ -1,8 +1,15 @@
 """tubetell — ask Gemini anything about a video.
 
 The source can be a YouTube URL, a `gs://` object, or a local video/audio file.
-Remote sources are fetched by Gemini on Vertex AI itself (no download, no
-transcript step); a local file is shrunk to a proxy by ffmpeg and sent inline.
+Gemini reads the video itself (no download, no transcript step), through one of
+two paths picked by --processing:
+    agentic     the Interactions API on the Gemini Developer API (GEMINI_API_KEY);
+                the model fetches and samples the video on its own
+    static      generate_content on Vertex AI (GOOGLE_CLOUD_PROJECT); a local
+                file is shrunk to a proxy by ffmpeg and sent inline
+    auto        agentic when GEMINI_API_KEY is set, the model supports it, the
+                source is YouTube or a local file, and neither --clip nor --fps
+                was given; otherwise static  (default)
 
 Modes (--mode), each a tuned prompt preset:
     summary     3-sentence summary + key points + entities + tone   (default)
@@ -28,7 +35,12 @@ from pathlib import Path
 from google.genai import errors as genai_errors
 
 from . import TubetellError, __version__
-from .config import check_credentials_file, load_env, missing_project_message
+from .config import (
+    check_credentials_file,
+    load_env,
+    load_gemini_api_key,
+    missing_credentials_message,
+)
 from .budget import plan
 from .gemini import (
     LIST_MODES,
@@ -61,6 +73,7 @@ def analyze(
     clip: str | None = None,
     width: int = 1280,
     transcode: bool = True,
+    processing: str = "auto",
 ) -> str:
     client = make_client()
     if mode == "comments":
@@ -122,7 +135,17 @@ def main() -> None:
     )
     p.add_argument("--mode", default="summary", choices=list(MODE_PROMPTS) + ["comments"])
     p.add_argument("--prompt", help="override the mode preset with a custom prompt")
-    p.add_argument("--model", default="gemini-2.5-flash", help="Gemini model id")
+    p.add_argument(
+        "--model", default="gemini-3.7-flash", help="Gemini model id (default: gemini-3.7-flash)"
+    )
+    p.add_argument(
+        "--processing",
+        default="auto",
+        choices=("auto", "agentic", "static"),
+        help="request path: agentic (Interactions API, needs GEMINI_API_KEY), static "
+        "(Vertex AI generate_content), or auto — agentic when its conditions hold, "
+        "else static (default: auto)",
+    )
     p.add_argument("--max-comments", type=int, default=100, help="comments mode: how many to pull")
     p.add_argument(
         "--fps",
@@ -151,8 +174,8 @@ def main() -> None:
 
     try:
         check_credentials_file()
-        if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
-            raise TubetellError(missing_project_message(loaded))
+        if not (load_gemini_api_key() or os.environ.get("GOOGLE_CLOUD_PROJECT")):
+            raise TubetellError(missing_credentials_message(loaded))
         result = analyze(
             args.source,
             mode=args.mode,
@@ -163,6 +186,7 @@ def main() -> None:
             clip=args.clip,
             width=args.width,
             transcode=not args.no_transcode,
+            processing=args.processing,
         )
     except TubetellError as exc:
         sys.exit(str(exc))

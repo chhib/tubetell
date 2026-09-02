@@ -18,6 +18,10 @@ ENV_KEYS = [
     "GOOGLE_CLOUD_LOCATION",
     "GOOGLE_APPLICATION_CREDENTIALS",
     "YOUTUBE_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_GENAI_USE_VERTEXAI",
+    "GOOGLE_GENAI_USE_ENTERPRISE",
     "TUBETELL_ENV",
 ]
 
@@ -42,6 +46,21 @@ def write_user_config(text):
     p.write_text(text)
     return p
 
+
+def test_clean_env_clears_the_gemini_key():
+    assert "GEMINI_API_KEY" not in os.environ
+
+def test_missing_credentials_error_names_both_variables(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "analyze", lambda url, **kw: pytest.fail("must not run"))
+
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, ["vOVKnYoH1p4"])
+
+    msg = str(exc.value)
+    assert "GEMINI_API_KEY" in msg
+    assert "GOOGLE_CLOUD_PROJECT" in msg
+    assert "tubetell/.env" in msg
 
 def test_user_config_used_when_cwd_has_no_dotenv(tmp_path, monkeypatch):
     write_user_config("GOOGLE_CLOUD_PROJECT=from-user-config\n")

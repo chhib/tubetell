@@ -81,6 +81,43 @@ def test_api_error_exits_with_clean_message(tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="Vertex AI error 403"):
         run_main(monkeypatch, ["vOVKnYoH1p4"])
 
+def test_main_exits_when_neither_key_nor_project_is_set(tmp_path, monkeypatch):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli, "analyze", lambda url, **kw: pytest.fail("must not run"))
+
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, ["vOVKnYoH1p4"])
+
+    msg = str(exc.value)
+    assert "GEMINI_API_KEY" in msg
+    assert "GOOGLE_CLOUD_PROJECT" in msg
+
+def test_main_passes_the_credentials_gate_with_only_a_gemini_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.delenv("GOOGLE_CLOUD_PROJECT", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+    monkeypatch.setattr(cli, "analyze", lambda url, **kw: seen.update(kw) or "ok")
+
+    run_main(monkeypatch, ["vOVKnYoH1p4", "--processing", "agentic"])
+
+    assert seen["processing"] == "agentic"
+    assert seen["model"] == "gemini-3.7-flash"
+
+def test_help_lists_processing_choices_and_model_default(monkeypatch, capsys):
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, ["--help"])
+
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "--processing {auto,agentic,static}" in out
+    assert "gemini-3.7-flash" in out
+    assert "Vertex AI itself" not in out
+
 def test_analyze_sends_the_prompt_with_the_timestamp_rule(monkeypatch):
     sent = {}
     monkeypatch.setattr(cli, "make_client", lambda: object())
@@ -92,7 +129,7 @@ def test_analyze_sends_the_prompt_with_the_timestamp_rule(monkeypatch):
 
     monkeypatch.setattr(cli, "generate", capture)
 
-    assert cli.analyze("vOVKnYoH1p4", mode="claims", prompt=None, model="m", max_comments=0) == "ok"
+    assert cli.analyze("vOVKnYoH1p4", mode="claims", prompt=None, model="m", max_comments=0, processing="static") == "ok"
     text = sent["c"].parts[1].text
     assert text.startswith(cli.MODE_PROMPTS["claims"])
     assert "runs 1:35:32" in text
@@ -113,7 +150,7 @@ def test_analyze_skips_the_runtime_when_a_clip_narrows_the_source(monkeypatch):
 
     cli.analyze(
         "vOVKnYoH1p4", mode="summary", prompt="Vad händer?", model="m", max_comments=0,
-        clip="1:30-2:45",
+        clip="1:30-2:45", processing="static",
     )
     text = sent["c"].parts[1].text
     assert text.startswith("Vad händer?")
@@ -131,7 +168,7 @@ def test_analyze_drops_resolution_for_an_hour_long_video(monkeypatch):
         return "ok"
 
     monkeypatch.setattr(cli, "generate", capture)
-    cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="m", max_comments=0)
+    cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="m", max_comments=0, processing="static")
     assert sent["low_res"] is True
 
 
@@ -146,7 +183,7 @@ def test_analyze_splits_a_very_long_video_and_merges(monkeypatch):
         return "piece"
 
     monkeypatch.setattr(cli, "generate", capture)
-    out = cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="m", max_comments=0)
+    out = cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="m", max_comments=0, processing="static")
     assert out == "piece"
     assert len(calls) >= 3  # at least two spans plus the merge
     assert all("None" not in c.parts[0].text for c in calls[:-1])
