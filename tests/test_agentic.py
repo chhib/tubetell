@@ -259,7 +259,7 @@ def test_local_file_is_uploaded_polled_used_and_deleted(clip, no_sleep, monkeypa
     assert answer(str(clip), model="m", text="Describe.") == "described"
 
     (upload,) = files.uploads
-    assert str(upload[0]) == str(clip)
+    assert upload[0].name == str(clip) and upload[0].closed
     assert files.gets == ["files/abc"]
     assert files.deletes == ["files/abc"]
     (kw,) = client.calls
@@ -340,7 +340,20 @@ def test_upload_uses_local_mime_when_file_reports_none(clip, no_sleep):
     files = FakeFiles(("ACTIVE",), mime=None)
     with uploaded_file(SimpleNamespace(files=files), str(clip)) as (uri, mime):
         assert mime == "video/quicktime"
-    assert files.uploads[0][1] == {"mime_type": "video/quicktime"}
+    assert files.uploads[0][1] == {"mime_type": "video/quicktime", "display_name": "clip.mov"}
+
+
+def test_upload_sends_bytes_not_a_path_so_non_ascii_names_survive(tmp_path, no_sleep):
+    # The SDK copies a path's basename into an HTTP header, which httpx rejects
+    # for non-ASCII; an open file has no such header and gets an ASCII display name.
+    p = tmp_path / "Mötesinspelning.mp4"
+    p.write_bytes(b"\0" * 64)
+    files = FakeFiles(("ACTIVE",))
+    with uploaded_file(SimpleNamespace(files=files), str(p)):
+        pass
+    handle, config = files.uploads[0]
+    assert hasattr(handle, "read") and handle.closed
+    assert config["display_name"].isascii() and config["display_name"].endswith(".mp4")
 
 
 def test_missing_path_fails_before_upload(tmp_path, monkeypatch):

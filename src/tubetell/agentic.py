@@ -191,8 +191,14 @@ def uploaded_file(client: genai.Client, source: str):
         raise TubetellError(f"{source} is a directory, not a media file.")
     mime = mime_type(path)
     _log(f"uploading {path.name} ({path.stat().st_size / 1024 / 1024:.0f} MB)...")
+    # Handed a path, the SDK copies its basename into an HTTP header, which
+    # fails on any non-ASCII character; an open file gets no such header.
+    display = path.name.encode("ascii", "replace").decode()
     try:
-        file = client.files.upload(file=path, config={"mime_type": mime})
+        with path.open("rb") as handle:
+            file = client.files.upload(
+                file=handle, config={"mime_type": mime, "display_name": display}
+            )
     except Exception as exc:
         raise TubetellError(f"Upload of {path.name} failed: {_message(exc)}") from exc
     try:
