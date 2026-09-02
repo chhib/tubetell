@@ -300,13 +300,11 @@ def source_part(
         )
         part = types.Part.from_bytes(data=data, mime_type=mime)
         clip = remaining_clip
-    elif source.startswith("gs://"):
+    elif kind == "gs":
         mime = MIME_BY_SUFFIX.get(Path(source).suffix.lower(), "video/*")
         part = types.Part(file_data=types.FileData(file_uri=source, mime_type=mime))
     else:
-        # A YouTube URL, or a bare video id — Vertex wants the full watch URL.
-        url = source if is_remote(source) else f"https://www.youtube.com/watch?v={video_id(source)}"
-        part = types.Part(file_data=types.FileData(file_uri=url, mime_type="video/*"))
+        part = types.Part(file_data=types.FileData(file_uri=youtube_url(source), mime_type="video/*"))
 
     metadata = video_metadata(fps=fps, clip=clip)
     if metadata is not None:

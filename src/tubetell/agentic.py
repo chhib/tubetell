@@ -18,9 +18,8 @@ from google import genai
 
 from . import TubetellError
 from .config import load_gemini_api_key, user_config_path
+from .gemini import MAX_OUTPUT_TOKENS
 from .media import mime_type, source_kind, youtube_url
-
-MAX_OUTPUT_TOKENS = 65535
 
 # Files API: how often to ask whether the upload is done, and when to give up.
 POLL_INTERVAL = 2.0
@@ -213,11 +212,9 @@ def uploaded_file(client: genai.Client, source: str):
 
 def answer(source: str, *, model: str, text: str) -> str:
     """The whole agentic path for one source: client, upload if local, interact."""
-    kind = source_kind(source)
-    if kind == "gs":
-        raise TubetellError("agentic mode does not support Cloud Storage (gs://) sources.")
-    client = make_developer_client()
-    if kind == "local":
+    if source_kind(source) == "local":
+        client = make_developer_client()
         with uploaded_file(client, source) as uploaded:
             return run(client, model=model, video=video_input(source, uploaded), text=text)
-    return run(client, model=model, video=video_input(source), text=text)
+    video = video_input(source)  # rejects gs:// before any client is built
+    return run(make_developer_client(), model=model, video=video, text=text)

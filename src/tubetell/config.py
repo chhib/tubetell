@@ -90,14 +90,6 @@ def _files_read(loaded: list[Path]) -> str:
     return ", ".join(str(p) for p in loaded) if loaded else "none found"
 
 
-def missing_project_message(loaded: list[Path]) -> str:
-    return (
-        "GOOGLE_CLOUD_PROJECT is not set. Export it, or put it in a .env file in the "
-        f"directory you run tubetell from, or in {user_config_path()} "
-        f"(config files read: {_files_read(loaded)})."
-    )
-
-
 def missing_credentials_message(loaded: list[Path]) -> str:
     return (
         "Neither GEMINI_API_KEY nor GOOGLE_CLOUD_PROJECT is set. Export one of them, "
