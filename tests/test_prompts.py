@@ -158,3 +158,9 @@ def test_video_body_appends_the_rule_to_preset_and_custom_prompts():
 def test_presets_leave_the_timestamp_format_to_the_rule():
     for mode, prompt in MODE_PROMPTS.items():
         assert "mm:ss" not in prompt, mode
+
+
+def test_request_config_disables_automatic_function_calling():
+    from tubetell.gemini import request_config
+
+    assert request_config().automatic_function_calling.disable is True

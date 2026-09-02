@@ -188,3 +188,121 @@ def test_analyze_splits_a_very_long_video_and_merges(monkeypatch):
     assert len(calls) >= 3  # at least two spans plus the merge
     assert all("None" not in c.parts[0].text for c in calls[:-1])
     assert "--- ANSWERS ---" in calls[-1]
+
+
+def _agentic_env(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(cli, "make_client", lambda: pytest.fail("Vertex client must not be built"))
+    monkeypatch.setattr(cli, "generate", lambda *a, **kw: pytest.fail("generate must not run"))
+    monkeypatch.setattr(cli, "source_duration", lambda source: 3452.0)
+
+
+def test_analyze_auto_takes_the_agentic_path_with_a_key(monkeypatch):
+    _agentic_env(monkeypatch)
+    seen = {}
+
+    def fake_answer(source, *, model, text):
+        seen.update(source=source, model=model, text=text)
+        return "agentic ok"
+
+    monkeypatch.setattr(cli, "agentic_answer", fake_answer)
+    out = cli.analyze("vOVKnYoH1p4", mode="claims", prompt=None, model="gemini-3.7-flash", max_comments=0)
+    assert out == "agentic ok"
+    assert seen["source"] == "vOVKnYoH1p4"
+    assert seen["text"].startswith(cli.MODE_PROMPTS["claims"])
+    assert "runs 57:32" in seen["text"]
+
+
+def test_analyze_auto_without_a_runtime_still_carries_the_timestamp_rule(monkeypatch):
+    _agentic_env(monkeypatch)
+    monkeypatch.setattr(cli, "source_duration", lambda source: None)
+    seen = {}
+    monkeypatch.setattr(cli, "agentic_answer", lambda s, *, model, text: seen.update(text=text) or "ok")
+    cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0)
+    assert "mm:ss" in seen["text"]
+    assert "runs " not in seen["text"]
+
+
+def test_analyze_auto_falls_back_to_static_for_a_clip_and_says_why(monkeypatch, capsys):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("agentic must not run"))
+    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
+    monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "static ok")
+    out = cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0, clip="10:00-20:00")
+    assert out == "static ok"
+    assert "processing: static — --clip is static-only" in capsys.readouterr().err
+
+
+def test_analyze_auto_is_silent_about_static_without_a_key(monkeypatch, capsys):
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
+    monkeypatch.setattr(cli, "source_duration", lambda source: 60.0)
+    monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "static ok")
+    cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0)
+    assert "processing:" not in capsys.readouterr().err
+
+
+def test_analyze_explicit_static_with_a_key_stays_on_vertex(monkeypatch, capsys):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("agentic must not run"))
+    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
+    monkeypatch.setattr(cli, "source_duration", lambda source: 60.0)
+    monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "static ok")
+    assert cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0, processing="static") == "static ok"
+    assert "processing:" not in capsys.readouterr().err
+
+
+def test_analyze_comments_mode_ignores_processing(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("agentic must not run"))
+    monkeypatch.setattr(cli, "make_client", lambda: "vertex")
+    monkeypatch.setattr(cli, "fetch_comments", lambda source, n: ("- hi", 1))
+    seen = {}
+
+    def capture(client, *, model, contents, low_res=False):
+        seen["client"] = client
+        return "sentiment"
+
+    monkeypatch.setattr(cli, "generate", capture)
+    out = cli.analyze("vOVKnYoH1p4", mode="comments", prompt=None, model="gemini-3.7-flash", max_comments=5, processing="agentic")
+    assert out == "sentiment" and seen["client"] == "vertex"
+
+
+def test_analyze_explicit_agentic_rejects_gs_before_any_client(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(cli, "make_client", lambda: pytest.fail("no client"))
+    monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("no agentic"))
+    with pytest.raises(TubetellError, match="Cloud Storage"):
+        cli.analyze("gs://b/clip.mp4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0, processing="agentic")
+
+
+def test_vertex_404_for_a_gemini3_model_hints_at_the_global_location(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "p")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west1")
+    err = genai_errors.APIError(404, {"error": {"message": "Publisher model was not found"}})
+
+    def boom(url, **kw):
+        raise err
+
+    monkeypatch.setattr(cli, "analyze", boom)
+    with pytest.raises(SystemExit, match="GOOGLE_CLOUD_LOCATION=global"):
+        run_main(monkeypatch, ["vOVKnYoH1p4", "--processing", "static"])
+
+
+def test_vertex_404_on_global_has_no_location_hint(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "p")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    err = genai_errors.APIError(404, {"error": {"message": "Publisher model was not found"}})
+
+    def boom(url, **kw):
+        raise err
+
+    monkeypatch.setattr(cli, "analyze", boom)
+    with pytest.raises(SystemExit) as e:
+        run_main(monkeypatch, ["vOVKnYoH1p4"])
+    assert "hint" not in str(e.value)

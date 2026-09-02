@@ -35,11 +35,14 @@ from pathlib import Path
 from google.genai import errors as genai_errors
 
 from . import TubetellError, __version__
+from .agentic import answer as agentic_answer
 from .config import (
     check_credentials_file,
     load_env,
     load_gemini_api_key,
     missing_credentials_message,
+    resolve_processing,
+    static_reason,
 )
 from .budget import plan
 from .gemini import (
@@ -57,6 +60,7 @@ from .media import (
     looks_like_path,
     parse_clip,
     source_duration,
+    source_kind,
     source_part,
 )
 from .youtube import fetch_comments
@@ -75,25 +79,39 @@ def analyze(
     transcode: bool = True,
     processing: str = "auto",
 ) -> str:
-    client = make_client()
     if mode == "comments":
         if looks_like_path(source):
             raise TubetellError(
                 "The comments mode reads a YouTube comment section, so it needs a "
                 "YouTube URL — a local file has none."
             )
+        client = make_client()
         comments, n = fetch_comments(source, max_comments)
         return generate(client, model=model, contents=comments_body(comments, n, prompt))
     span = parse_clip(clip) if clip else None
+    request = prompt or MODE_PROMPTS[mode]
+    conditions = dict(
+        has_key=load_gemini_api_key() is not None,
+        model=model,
+        source_kind=source_kind(source),
+        clip=span,
+        fps=fps,
+    )
+    path = resolve_processing(processing, **conditions)
     # A clip leaves it ambiguous whether the model counts from the clip or from
     # the original video, so only an uncut source gets a runtime to cite against.
     duration = None if span else source_duration(source)
+    if path == "agentic":
+        return agentic_answer(source, model=model, text=video_body(request, duration))
+    reason = static_reason(**conditions) if processing == "auto" else None
+    if reason:
+        print(f"processing: static — {reason}", file=sys.stderr)
+    client = make_client()
     fit = plan(
         (span[1] - span[0]) if span else duration,
         fps=fps,
         clip=span,
     )
-    request = prompt or MODE_PROMPTS[mode]
 
     def ask(piece: tuple[int, int] | None, runtime: float | None) -> str:
         part = source_part(
@@ -121,6 +139,17 @@ def analyze(
         print(f"  span {format_offset(a)}-{format_offset(b)}", file=sys.stderr)
         answers.append(((a, b), ask((a, b), None)))
     return generate(client, model=model, contents=merge_body(request, answers))
+
+
+def vertex_hint(exc: genai_errors.APIError, model: str) -> str:
+    """Gemini 3.x is only served from the `global` location; say so on a 404."""
+    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+    if exc.code == 404 and model.startswith("gemini-3") and location != "global":
+        return (
+            f"\n  hint: {model} is not served from {location}; set "
+            "GOOGLE_CLOUD_LOCATION=global (or use --model gemini-2.5-flash)."
+        )
+    return ""
 
 
 def main() -> None:
@@ -191,7 +220,7 @@ def main() -> None:
     except TubetellError as exc:
         sys.exit(str(exc))
     except genai_errors.APIError as exc:  # 4xx: bad project, missing API, no access
-        sys.exit(f"Vertex AI error {exc.code}: {exc.message}")
+        sys.exit(f"Vertex AI error {exc.code}: {exc.message}{vertex_hint(exc, args.model)}")
 
     if args.out:
         out = Path(args.out).expanduser()

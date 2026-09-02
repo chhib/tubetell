@@ -150,7 +150,12 @@ TOKEN_LIMIT_HINT = (
 
 
 def request_config(*, low_res: bool = False) -> types.GenerateContentConfig:
-    cfg = types.GenerateContentConfig(max_output_tokens=MAX_OUTPUT_TOKENS)
+    # No tools are ever declared, so AFC has nothing to do; disabling it also
+    # keeps google-genai 2.21+ from logging an AFC warning on every call.
+    cfg = types.GenerateContentConfig(
+        max_output_tokens=MAX_OUTPUT_TOKENS,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+    )
     if low_res:
         cfg.media_resolution = types.MediaResolution.MEDIA_RESOLUTION_LOW
     return cfg
