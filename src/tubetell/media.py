@@ -53,7 +53,7 @@ PROXY_LADDER = ((960, 1.0), (640, 1.0), (480, 0.5))
 
 
 def is_remote(source: str) -> bool:
-    """True for sources Vertex fetches itself (YouTube page, GCS object)."""
+    """True for sources passed by reference (YouTube page, GCS object), not uploaded."""
     return source.startswith(("http://", "https://", "gs://"))
 
 

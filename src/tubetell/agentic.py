@@ -15,6 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from google import genai
+from google.genai import types
 
 from . import TubetellError
 from .config import load_gemini_api_key, user_config_path
@@ -46,13 +47,22 @@ def make_developer_client() -> genai.Client:
             "GEMINI_API_KEY is not set. Export it, or put it in a .env file in the "
             f"directory you run tubetell from, or in {user_config_path()}."
         )
-    return genai.Client(vertexai=False, api_key=key)
+    # interactions.create retries on its own; files.upload/get/delete only do
+    # when retry options are set, and a 300 MB upload deserves a second try.
+    return genai.Client(
+        vertexai=False,
+        api_key=key,
+        http_options=types.HttpOptions(retry_options=types.HttpRetryOptions()),
+    )
 
 
 def video_input(source: str, uploaded: tuple[str, str] | None = None) -> dict:
     """The video half of the request: a YouTube URL, or an uploaded file's URI."""
     if uploaded is not None:
         uri, mime = uploaded
+        if mime.startswith("audio/"):
+            # processing is a video-only field; the API rejects it on audio parts.
+            return {"type": "audio", "uri": uri, "mime_type": mime}
         return {"type": "video", "uri": uri, "mime_type": mime, "processing": "agentic"}
     if source_kind(source) == "gs":
         raise TubetellError("agentic mode does not support Cloud Storage (gs://) sources.")
@@ -134,8 +144,9 @@ def run(client: genai.Client, *, model: str, video: dict, text: str) -> str:
         print(usage, file=sys.stderr)
     if status in ("incomplete", "budget_exceeded"):
         print(
-            "  warning: the answer hit the output cap and was cut off — "
-            "analyze a shorter span with --clip START-END for the rest.",
+            "  warning: the answer hit the output cap and was cut off — narrow the "
+            "question with --prompt, or re-run with --processing static --clip "
+            "START-END (Vertex) for the rest.",
             file=sys.stderr,
         )
     answer_text = _answer_text(resp)

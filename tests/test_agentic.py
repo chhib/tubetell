@@ -115,7 +115,8 @@ def test_format_usage_interaction_none_usage():
 def test_run_warns_when_truncated(capsys, status):
     resp = interaction([step("model_output", "partial")], status=status)
     assert run(fake_client(resp), model="m", video=video_input(WATCH), text="Q") == "partial"
-    assert "cut off" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "cut off" in err and "--processing static" in err and "--clip START-END" not in err.split("--processing static")[0]
 
 
 def test_run_does_not_warn_when_completed(capsys):
@@ -124,15 +125,24 @@ def test_run_does_not_warn_when_completed(capsys):
     assert "cut off" not in capsys.readouterr().err
 
 
-def test_run_failed_status_raises_with_api_message(capsys):
+def test_run_failed_status_raises_with_top_level_error(capsys):
     resp = interaction(
-        [step("model_output", error=SimpleNamespace(code="x", message="Video too long"))],
+        [step("model_output")],
         status="failed",
         errors=[SimpleNamespace(code="x", message="Video too long")],
     )
     with pytest.raises(TubetellError, match="Video too long"):
         run(fake_client(resp), model="m", video=video_input(WATCH), text="Q")
     assert capsys.readouterr().out == ""
+
+
+def test_run_failed_status_falls_back_to_the_step_error():
+    resp = interaction(
+        [step("model_output", error=SimpleNamespace(code="x", message="Unsupported codec"))],
+        status="failed",
+    )
+    with pytest.raises(TubetellError, match="Unsupported codec"):
+        run(fake_client(resp), model="m", video=video_input(WATCH), text="Q")
 
 
 def test_run_failed_status_falls_back_to_status_when_no_message():
@@ -200,7 +210,9 @@ def test_make_developer_client_uses_explicit_key_and_no_vertex(monkeypatch):
     monkeypatch.setattr(agentic.genai, "Client", fake_client_ctor)
 
     assert make_developer_client() == "client"
-    assert seen == {"vertexai": False, "api_key": "the-key"}
+    assert seen["vertexai"] is False and seen["api_key"] == "the-key"
+    # files.upload/get/delete only retry transient failures when retry options are set
+    assert seen["http_options"].retry_options is not None
 
 
 # --- Files API lifecycle ----------------------------------------------------
@@ -397,3 +409,16 @@ def test_youtube_answer_goes_straight_to_run(monkeypatch):
     monkeypatch.setattr(agentic, "make_developer_client", lambda: client)
     assert answer("https://youtu.be/vOVKnYoH1p4", model="m", text="Q") == "yt"
     assert client.calls[0]["input"][0]["uri"] == "https://youtu.be/vOVKnYoH1p4"
+
+
+def test_audio_files_are_sent_as_an_audio_block_without_processing(tmp_path, no_sleep):
+    p = tmp_path / "talk.mp3"
+    p.write_bytes(b"\0" * 64)
+    files = FakeFiles(("ACTIVE",), mime="audio/mpeg")
+    client = fake_client(interaction([step("model_output", "heard")]), files=files)
+    with uploaded_file(client, str(p)) as uploaded:
+        assert run(client, model="m", video=video_input(str(p), uploaded), text="Q") == "heard"
+    (kw,) = client.calls
+    media = kw["input"][0]
+    assert media["type"] == "audio" and media["mime_type"] == "audio/mpeg"
+    assert "processing" not in media

@@ -123,8 +123,10 @@ truncated transcript.
 
 Local video and audio both work — `.mov`, `.mp4`, `.webm`, `.mkv`, `.avi`,
 `.mpeg`, `.flv`, `.wmv`, `.3gp`, `.mp3`, `.wav`, `.m4a`, `.aac`, `.ogg`,
-`.flac`. Only `--mode comments` is YouTube-only; it reads a comment section,
-which a local file doesn't have.
+`.flac`. An audio file on the agentic path is uploaded the same way but sent as
+an audio part — the on-demand `processing` mode is video-only, so audio is
+tokenized in full (about 32 tokens a second). Only `--mode comments` is
+YouTube-only; it reads a comment section, which a local file doesn't have.
 
 ### Local files, agentic: the Files API
 
