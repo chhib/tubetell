@@ -28,7 +28,12 @@ from . import TubetellError
 CREDS = "GOOGLE_APPLICATION_CREDENTIALS"
 
 
-AGENTIC_MODELS = ("gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite")
+AGENTIC_MODELS = (
+    "gemini-3.8-flash",
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+)
 
 
 def user_config_path() -> Path:

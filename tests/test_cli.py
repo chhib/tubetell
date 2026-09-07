@@ -106,7 +106,7 @@ def test_main_passes_the_credentials_gate_with_only_a_gemini_key(tmp_path, monke
     run_main(monkeypatch, ["vOVKnYoH1p4", "--processing", "agentic"])
 
     assert seen["processing"] == "agentic"
-    assert seen["model"] == "gemini-3.7-flash"
+    assert seen["model"] == "gemini-3.8-flash"
 
 def test_help_lists_processing_choices_and_model_default(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exc:
@@ -115,12 +115,12 @@ def test_help_lists_processing_choices_and_model_default(monkeypatch, capsys):
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "--processing {auto,agentic,static}" in out
-    assert "gemini-3.7-flash" in out
+    assert "gemini-3.8-flash" in out
     assert "Vertex AI itself" not in out
 
 def test_analyze_sends_the_prompt_with_the_timestamp_rule(monkeypatch):
     sent = {}
-    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
     monkeypatch.setattr(cli, "source_duration", lambda source: 5732.0)
     def capture(client, *, model, contents, low_res=False):
@@ -137,7 +137,7 @@ def test_analyze_sends_the_prompt_with_the_timestamp_rule(monkeypatch):
 
 def test_analyze_skips_the_runtime_when_a_clip_narrows_the_source(monkeypatch):
     sent = {}
-    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
     monkeypatch.setattr(
         cli, "source_duration", lambda source: pytest.fail("must not probe a clipped source")
@@ -159,7 +159,7 @@ def test_analyze_skips_the_runtime_when_a_clip_narrows_the_source(monkeypatch):
 
 def test_analyze_drops_resolution_for_an_hour_long_video(monkeypatch):
     sent = {}
-    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
     monkeypatch.setattr(cli, "source_duration", lambda source: 61 * 60.0)
 
@@ -174,7 +174,7 @@ def test_analyze_drops_resolution_for_an_hour_long_video(monkeypatch):
 
 def test_analyze_splits_a_very_long_video_and_merges(monkeypatch):
     calls = []
-    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text=str(kw["clip"])))
     monkeypatch.setattr(cli, "source_duration", lambda source: 6 * 3600.0)
 
@@ -192,7 +192,7 @@ def test_analyze_splits_a_very_long_video_and_merges(monkeypatch):
 
 def _agentic_env(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
-    monkeypatch.setattr(cli, "make_client", lambda: pytest.fail("Vertex client must not be built"))
+    monkeypatch.setattr(cli, "make_client", lambda *_: pytest.fail("Vertex client must not be built"))
     monkeypatch.setattr(cli, "generate", lambda *a, **kw: pytest.fail("generate must not run"))
     monkeypatch.setattr(cli, "source_duration", lambda source: 3452.0)
 
@@ -226,7 +226,7 @@ def test_analyze_auto_without_a_runtime_still_carries_the_timestamp_rule(monkeyp
 def test_analyze_auto_falls_back_to_static_for_a_clip_and_says_why(monkeypatch, capsys):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("agentic must not run"))
-    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
     monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "static ok")
     out = cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0, clip="10:00-20:00")
@@ -236,7 +236,7 @@ def test_analyze_auto_falls_back_to_static_for_a_clip_and_says_why(monkeypatch, 
 
 def test_analyze_auto_is_silent_about_static_without_a_key(monkeypatch, capsys):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
     monkeypatch.setattr(cli, "source_duration", lambda source: 60.0)
     monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "static ok")
@@ -247,7 +247,7 @@ def test_analyze_auto_is_silent_about_static_without_a_key(monkeypatch, capsys):
 def test_analyze_explicit_static_with_a_key_stays_on_vertex(monkeypatch, capsys):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("agentic must not run"))
-    monkeypatch.setattr(cli, "make_client", lambda: object())
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
     monkeypatch.setattr(cli, "source_duration", lambda source: 60.0)
     monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "static ok")
@@ -258,7 +258,7 @@ def test_analyze_explicit_static_with_a_key_stays_on_vertex(monkeypatch, capsys)
 def test_analyze_comments_mode_ignores_processing(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("agentic must not run"))
-    monkeypatch.setattr(cli, "make_client", lambda: "vertex")
+    monkeypatch.setattr(cli, "make_client", lambda *_: "vertex")
     monkeypatch.setattr(cli, "fetch_comments", lambda source, n: ("- hi", 1))
     seen = {}
 
@@ -273,13 +273,14 @@ def test_analyze_comments_mode_ignores_processing(monkeypatch):
 
 def test_analyze_explicit_agentic_rejects_gs_before_any_client(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
-    monkeypatch.setattr(cli, "make_client", lambda: pytest.fail("no client"))
+    monkeypatch.setattr(cli, "make_client", lambda *_: pytest.fail("no client"))
     monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("no agentic"))
     with pytest.raises(TubetellError, match="Cloud Storage"):
         cli.analyze("gs://b/clip.mp4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0, processing="agentic")
 
 
-def test_vertex_404_for_a_gemini3_model_hints_at_the_global_location(tmp_path, monkeypatch):
+def test_vertex_404_is_reported_without_a_location_hint(tmp_path, monkeypatch):
+    """The region case is fixed upstream in make_client, so nothing is annotated here."""
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "p")
     monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west1")
@@ -289,20 +290,7 @@ def test_vertex_404_for_a_gemini3_model_hints_at_the_global_location(tmp_path, m
         raise err
 
     monkeypatch.setattr(cli, "analyze", boom)
-    with pytest.raises(SystemExit, match="GOOGLE_CLOUD_LOCATION=global"):
-        run_main(monkeypatch, ["vOVKnYoH1p4", "--processing", "static"])
-
-
-def test_vertex_404_on_global_has_no_location_hint(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "p")
-    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
-    err = genai_errors.APIError(404, {"error": {"message": "Publisher model was not found"}})
-
-    def boom(url, **kw):
-        raise err
-
-    monkeypatch.setattr(cli, "analyze", boom)
     with pytest.raises(SystemExit) as e:
-        run_main(monkeypatch, ["vOVKnYoH1p4"])
+        run_main(monkeypatch, ["vOVKnYoH1p4", "--processing", "static"])
+    assert "Vertex AI error 404" in str(e.value)
     assert "hint" not in str(e.value)

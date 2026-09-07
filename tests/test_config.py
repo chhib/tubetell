@@ -19,6 +19,29 @@ def test_make_client_requires_project(monkeypatch):
         make_client()
 
 
+def test_make_client_coerces_gemini_3_to_global(monkeypatch, capsys):
+    seen = {}
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "p")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west1")
+    monkeypatch.setattr("tubetell.gemini.genai.Client", lambda **kw: seen.update(kw))
+
+    make_client("gemini-3.8-flash")
+
+    assert seen["location"] == "global"
+    assert "europe-west1 -> global" in capsys.readouterr().err
+
+
+def test_make_client_keeps_the_region_for_other_models(monkeypatch):
+    seen = {}
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "p")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "europe-west1")
+    monkeypatch.setattr("tubetell.gemini.genai.Client", lambda **kw: seen.update(kw))
+
+    make_client("gemini-2.5-flash")
+
+    assert seen["location"] == "europe-west1"
+
+
 def test_load_api_key_requires_key(monkeypatch):
     monkeypatch.delenv("YOUTUBE_API_KEY", raising=False)
     with pytest.raises(TubetellError, match="YOUTUBE_API_KEY"):

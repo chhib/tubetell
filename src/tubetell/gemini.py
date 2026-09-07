@@ -106,15 +106,25 @@ def video_body(text: str, duration: float | None = None) -> str:
     return f"{text}\n\n{timestamp_rule(duration)}"
 
 
-def make_client() -> genai.Client:
+def make_client(model: str | None = None) -> genai.Client:
     """Vertex-mode client from env config.
 
     Auth is handled by google.auth: a service-account key if
     GOOGLE_APPLICATION_CREDENTIALS is set, otherwise local ADC
     (`gcloud auth application-default login`).
+
+    On Vertex the Gemini 3.x models are only served from `global`, so a regional
+    GOOGLE_CLOUD_LOCATION left over from another project would 404 every call.
+    Rather than fail, coerce those models to `global` and say so once.
     """
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
+    if model and model.startswith("gemini-3") and location != "global":
+        print(
+            f"location: {location} -> global ({model} is only served from global)",
+            file=sys.stderr,
+        )
+        location = "global"
     if not project:
         raise TubetellError(
             "GOOGLE_CLOUD_PROJECT is not set. Export it, or put it in a .env file "

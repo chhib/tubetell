@@ -9,7 +9,7 @@ Two suites: the [static runs](#static-runs-vertex-gemini-25-flash) were made
 with tubetell 0.3 on Vertex with `gemini-2.5-flash`, where the whole video is
 tokenized up front. The [agentic runs](#agentic-runs-gemini-37-flash) repeat
 the same six commands with tubetell 0.4 and `GEMINI_API_KEY` set, so `auto`
-picks the Interactions API with the default `gemini-3.7-flash` — same video,
+picks the Interactions API with the default `gemini-3.8-flash` (or `gemini-3.7-flash`) — same video,
 same prompts, ~1-2 % of the tokens.
 
 ## Static runs (Vertex, `gemini-2.5-flash`)

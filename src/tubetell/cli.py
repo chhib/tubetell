@@ -85,7 +85,7 @@ def analyze(
                 "The comments mode reads a YouTube comment section, so it needs a "
                 "YouTube URL — a local file has none."
             )
-        client = make_client()
+        client = make_client(model)
         comments, n = fetch_comments(source, max_comments)
         return generate(client, model=model, contents=comments_body(comments, n, prompt))
     span = parse_clip(clip) if clip else None
@@ -106,7 +106,7 @@ def analyze(
     reason = static_reason(**conditions) if processing == "auto" else None
     if reason:
         print(f"processing: static — {reason}", file=sys.stderr)
-    client = make_client()
+    client = make_client(model)
     fit = plan(
         (span[1] - span[0]) if span else duration,
         fps=fps,
@@ -141,17 +141,6 @@ def analyze(
     return generate(client, model=model, contents=merge_body(request, answers))
 
 
-def vertex_hint(exc: genai_errors.APIError, model: str) -> str:
-    """Gemini 3.x is only served from the `global` location; say so on a 404."""
-    location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
-    if exc.code == 404 and model.startswith("gemini-3") and location != "global":
-        return (
-            f"\n  hint: {model} is not served from {location}; set "
-            "GOOGLE_CLOUD_LOCATION=global (or use --model gemini-2.5-flash)."
-        )
-    return ""
-
-
 def main() -> None:
     p = argparse.ArgumentParser(
         prog="tubetell",
@@ -165,7 +154,7 @@ def main() -> None:
     p.add_argument("--mode", default="summary", choices=list(MODE_PROMPTS) + ["comments"])
     p.add_argument("--prompt", help="override the mode preset with a custom prompt")
     p.add_argument(
-        "--model", default="gemini-3.7-flash", help="Gemini model id (default: gemini-3.7-flash)"
+        "--model", default="gemini-3.8-flash", help="Gemini model id (default: gemini-3.8-flash)"
     )
     p.add_argument(
         "--processing",
@@ -220,7 +209,7 @@ def main() -> None:
     except TubetellError as exc:
         sys.exit(str(exc))
     except genai_errors.APIError as exc:  # 4xx: bad project, missing API, no access
-        sys.exit(f"Vertex AI error {exc.code}: {exc.message}{vertex_hint(exc, args.model)}")
+        sys.exit(f"Vertex AI error {exc.code}: {exc.message}")
 
     if args.out:
         out = Path(args.out).expanduser()

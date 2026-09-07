@@ -36,6 +36,7 @@ tubetell gameplay.mov --fps 2 --clip 1:30-2:45      # static: exact frames, one 
 | `comments` | audience sentiment from top comments (reads comments, not the video) |
 
 `--prompt "..."` overrides the mode preset entirely — ask the video anything.
+`--model <model>` selects the model (default: `gemini-3.8-flash`).
 
 See [docs/example.md](docs/example.md) for a worked example: all five modes
 plus a custom prompt on one video, in both processing modes, with real outputs
@@ -62,7 +63,7 @@ when all of these hold, and **static** otherwise:
 | Condition | Why |
 |---|---|
 | `GEMINI_API_KEY` is set | agentic runs on the Gemini Developer API; Vertex's Interactions endpoint does not accept any model yet |
-| the model is `gemini-3.7-flash`, `gemini-3.6-flash` or `gemini-3.5-flash-lite` | the only models that support `processing: "agentic"` |
+| the model is `gemini-3.8-flash` (default), `gemini-3.7-flash`, `gemini-3.6-flash` or `gemini-3.5-flash-lite` | the only models that support `processing: "agentic"` |
 | the source is a YouTube URL/id or a local file | `gs://` objects can only be read by Vertex |
 | neither `--clip` nor `--fps` is given | those steer the static frame sampler; the agentic model samples on its own |
 
@@ -70,7 +71,7 @@ When auto falls back to static even though a key is present, stderr says why:
 
 ```
 processing: static — --clip is static-only
-processing: static — gemini-2.5-pro is not an agentic model (supported: gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash-lite)
+processing: static — gemini-2.5-pro is not an agentic model (supported: gemini-3.8-flash, gemini-3.7-flash, gemini-3.6-flash, gemini-3.5-flash-lite)
 processing: static — agentic mode does not support Cloud Storage (gs://) sources
 ```
 
@@ -84,8 +85,8 @@ The stderr usage line tells you which path ran. Agentic adds a `tool` bucket
 for the timeline navigation:
 
 ```
-tokens: 241 in + 1,602 thinking + 287 tool + 1,320 out = 3,450 total      # agentic
-tokens: 287,866 in + 1,534 thinking + 1,019 out = 290,419 total           # static
+tokens: 2,377 in + 21,663 thinking + 5,513 tool + 5,232 out = 34,785 total  # agentic
+tokens: 287,866 in + 1,534 thinking + 1,019 out = 290,419 total            # static
 ```
 
 ## Long videos
@@ -104,9 +105,8 @@ maximum number of tokens allowed". When tubetell knows the runtime (ffprobe for
 a file, `videos.list` for YouTube when `YOUTUBE_API_KEY` is set) it sizes the
 request itself: first it samples frames at low resolution (66 tokens a frame —
 fine for anything where the words matter more than the pixels), and if that
-still won't fit it analyzes the video in consecutive clips. `transcript` and
-`claims` output is concatenated; every other mode gets one merge pass so you
-still receive a single answer. Without a runtime it can't plan, so the 400
+still won't fit it analyzes the video in consecutive clips and merges the answers
+so you still receive a single answer. Without a runtime it can't plan, so the 400
 comes back with a hint: set the key, lower `--fps`, or pass `--clip`.
 
 A response is capped at 65,535 output tokens in both modes; if an answer hits
@@ -225,11 +225,12 @@ export GOOGLE_CLOUD_LOCATION=global        # optional, this is the default
 ```
 
 Leave `GOOGLE_CLOUD_LOCATION` at `global`: on Vertex the Gemini 3.x models are
-only served from there. A regional value such as `europe-west1` gets a 404,
-which tubetell annotates:
+only served from there. A regional value such as `europe-west1` used to 404 every
+call; tubetell now coerces it to `global` for those models and says so once on
+stderr, so a stale regional setting from another project no longer breaks a run:
 
 ```
-hint: gemini-3.7-flash is not served from europe-west1; set GOOGLE_CLOUD_LOCATION=global (or use --model gemini-2.5-flash).
+location: europe-west1 -> global (gemini-3.8-flash is only served from global)
 ```
 
 ### Vertex auth, two ways
@@ -271,27 +272,27 @@ tubetell prints a usage line to stderr on every run, so you can watch your own
 spend (stdout stays clean for piping):
 
 ```
-tokens: 241 in + 1,602 thinking + 287 tool + 1,320 out = 3,450 total      # agentic
-tokens: 287,866 in + 1,534 thinking + 1,019 out = 290,419 total           # static
+tokens: 2,377 in + 21,663 thinking + 5,513 tool + 5,232 out = 34,785 total  # agentic
+tokens: 287,866 in + 1,534 thinking + 1,019 out = 290,419 total            # static
 ```
 
 ### Agentic
 
 The model reads only what it needs, so tokens no longer scale with runtime.
-Measured on a 57:32 podcast (`vOVKnYoH1p4`) with `gemini-3.7-flash`:
+Measured on a 57:32 podcast (`vOVKnYoH1p4`) with `gemini-3.8-flash` (default):
 
-| Run | Tokens | Wall time |
-|---|---|---|
-| `--mode claims` (33 claims, 01:29–54:17) | `241 in + 1,602 thinking + 287 tool + 1,320 out = 3,450 total` | 14 s |
-| `--mode transcript` (381 lines, 00:00→57:30, complete) | `289 in + 2,174 thinking + 335 tool + 16,141 out = 18,939 total` | 57 s |
-| the same video static, low-res frames, `summary` | ~314,000 input tokens (transcript would need the clip planner) | 56 s |
+| Run | Tokens | Wall time | Approx cost |
+|---|---|---|---|
+| `--mode claims` (45 claims, 01:28–54:17) | `2,377 in + 21,663 thinking + 5,513 tool + 5,232 out = 34,785 total` | 45 s | ~$0.10 |
+| `--mode transcript` (complete, 00:00→57:30) | `275 in + 4,029 thinking + 321 tool + 13,350 out = 17,975 total` | 50 s | ~$0.065 |
+| the same video static, low-res frames, `summary` | ~314,000 input tokens (transcript would need the clip planner) | 56 s | ~$0.094 |
 
-That is roughly 90 % fewer tokens on an hour-long video. The bill falls less
-than the token count does, because most of what remains is thinking and
-output, billed at the output rate rather than the input rate — call it about
-two-thirds cheaper, not 90 %. A short local file is cheaper still: an 11 MB,
-7-second `.mp4` came to `200 in + 457 thinking + 706 tool + 188 out = 1,551
-total` in 23 s including the upload.
+That is roughly 90–98 % fewer video input tokens on an hour-long video. Most of
+what is billed is thinking and output tokens at the generation rate. On a 17-minute
+video (`LuA3FG-VCSs`), a default `summary` runs in 21 s and takes `8,020 total`
+tokens (~$0.027). A short local file is cheaper still: an 11 MB, 7-second `.mp4`
+came to `200 in + 457 thinking + 706 tool + 188 out = 1,551 total` in 23 s
+including the upload.
 
 ### Static
 
@@ -304,9 +305,9 @@ length**, not with the question. Measured on `gemini-2.5-flash`:
 | audio track | 25 |
 | **total** | **≈283** (≈1M tokens per hour of video) |
 
-`gemini-3.7-flash` tokenizes video about 3× cheaper even on this path — the
-same 30-second clip on Vertex was 2,880 input tokens on 3.7-flash against 8,639
-on 2.5-flash. Two consequences either way:
+The 3.x models (`gemini-3.8-flash`, `gemini-3.7-flash`) tokenize video about 3×
+cheaper even on this path — the same 30-second clip on Vertex was 2,880 input
+tokens on 3.x against 8,639 on 2.5-flash. Two consequences either way:
 
 - **You pay for the whole video on every run.** Vertex re-fetches and
   re-tokenizes it each call — there is no caching. Want several answers about
@@ -347,9 +348,11 @@ does not serve that endpoint yet. Check that `GEMINI_API_KEY` is set and
 actually reaching tubetell (config precedence under [Setup](#setup)), and what
 `--processing` you passed.
 
-**404 on a Gemini 3.x model from Vertex.** The 3.x models are only served from
-the `global` location. Set `GOOGLE_CLOUD_LOCATION=global` (or unset it — that
-is the default); tubetell prints the hint when it recognizes the case.
+**404 on Vertex.** Tubetell automatically coerces Gemini 3.x models to the
+`global` location (and reports `location: <region> -> global` on stderr if a
+regional location was set). If Vertex still returns a 404, verify that the Vertex
+AI API is enabled in your Google Cloud project and that the requested model is
+accessible.
 
 **`--processing agentic is not possible here: ...`.** One of the auto
 conditions in [Processing modes](#processing-modes) is unmet; the message
@@ -383,6 +386,43 @@ file instead.
 
 **`ffmpeg is not installed`.** Only local files over ~12 MiB on the static
 path need it: `brew install ffmpeg`.
+
+## Agent skill (Claude Code, agy, Codex)
+
+To let coding assistants (**Claude Code**, **Antigravity CLI / agy**, and **OpenAI Codex**) automatically reach for `tubetell` whenever you share a video link or local recording, install the skill into `~/.agents/skills/tubetell/SKILL.md` (or `.agents/skills/tubetell/SKILL.md` in your project):
+
+````markdown
+---
+name: tubetell
+description: Analyze, summarize, transcribe, or extract claims and sentiment from a YouTube video (or local audio/video file) using Gemini. Use whenever the user shares a YouTube URL/id or video file and wants a summary, full transcript, factual claims, tone analysis, or audience comments. Prefer this over web scraping, transcript scrapers, yt-dlp, or browser automation.
+---
+
+# tubetell
+
+`tubetell` asks Gemini about video or audio content. In agentic mode (default with `GEMINI_API_KEY` and `gemini-3.8-flash`), Gemini interacts directly with the video timeline on-demand — no downloads, no manual transcription, and ~98% fewer tokens than static ingestion.
+
+## Usage
+
+Run commands via your shell tool:
+
+```bash
+tubetell "<url>"                                          # summary (default)
+tubetell "<url>" --mode transcript --out transcript.md    # write long transcripts to file
+tubetell "<url>" --mode claims                            # factual claims + timestamps + speaker
+tubetell "<url>" --mode sentiment                         # timeline tone shifts
+tubetell "<url>" --mode comments --max-comments 100       # audience comments (YouTube API)
+tubetell "<url>" --prompt "..."                           # free-form question
+tubetell recording.mp4 --prompt "What error occurred?"    # local screen/camera recordings
+```
+
+## Agent Guidelines
+
+- **Write transcripts to disk:** Pass `--out transcript.md` to prevent massive transcripts from flooding your context window.
+- **Default model:** Uses `gemini-3.8-flash` with native agentic timeline navigation.
+- **Subagents:** For comprehensive research, run parallel calls (summary, claims, comments) in background subagents, then synthesize the outputs in the primary session.
+````
+
+The ready-to-use skill is bundled in [`skills/tubetell/SKILL.md`](skills/tubetell/SKILL.md).
 
 ## Development
 
