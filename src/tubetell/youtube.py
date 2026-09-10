@@ -59,23 +59,37 @@ def parse_iso8601_duration(text: str) -> float | None:
     return total or None
 
 
-def fetch_duration(url: str) -> float | None:
-    """A YouTube video's runtime in seconds, or None when it can't be had.
+def fetch_video_facts(url: str) -> tuple[float | None, str | None]:
+    """A YouTube video's (runtime in seconds, description), each None if unavailable.
+
+    Both come from one `videos.list` call — the same 1 quota unit the runtime
+    lookup already cost — because the prompt wants them for the same reason: to
+    pin the model to what is real. The runtime bounds its timestamps; the
+    description usually names who is actually in the episode, which is the only
+    external check on the speaker labels the model would otherwise invent.
 
     Deliberately best effort: the video modes need no API key of their own, so a
     missing key, an unparseable URL, or a failed call just means the prompt goes
-    out without a runtime to bound its timestamps against.
+    out without either.
     """
     try:
         key = load_api_key()
         vid = video_id(url)
-        data = _get("videos", {"part": "contentDetails", "id": vid}, key)
+        data = _get("videos", {"part": "contentDetails,snippet", "id": vid}, key)
     except (TubetellError, requests.RequestException):
-        return None
+        return None, None
     items = data.get("items") or []
     if not items:
-        return None
-    return parse_iso8601_duration(items[0].get("contentDetails", {}).get("duration", ""))
+        return None, None
+    item = items[0]
+    duration = parse_iso8601_duration(item.get("contentDetails", {}).get("duration", ""))
+    description = (item.get("snippet", {}).get("description") or "").strip() or None
+    return duration, description
+
+
+def fetch_duration(url: str) -> float | None:
+    """A YouTube video's runtime in seconds, or None when it can't be had."""
+    return fetch_video_facts(url)[0]
 
 
 def fetch_comments(url: str, limit: int) -> tuple[str, int]:

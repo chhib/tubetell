@@ -53,6 +53,36 @@ TIMESTAMP_RULE = (
     "timestamp instead of inventing one."
 )
 
+# Gemini will not say "I don't know who that is". Asked to attribute a line, it
+# invents a plausible-sounding name from the video's domain and then uses it
+# consistently for the whole answer, which is exactly what makes the mistake
+# survive review — a made-up "Anders Malmström" reads like a real Swedish
+# finance name and never wavers. Worse, two runs over the same video invent
+# different names, so the transcript and the claims list disagree about who said
+# what. Names are the one thing in an answer that cannot be checked against the
+# media itself, so they get their own rule, and grounding from the description
+# where we have it.
+SPEAKER_RULE = (
+    "Speaker rules: only ever attribute a line to a NAME you actually heard "
+    "spoken in the audio, saw written on screen, or were given below. You do not "
+    "otherwise know who these people are. Never infer a name from the subject "
+    "matter, the channel, or what sounds plausible for the context, and never "
+    "carry a name you guessed once through the rest of the answer. Where you do "
+    "not have a name, use a stable generic label instead — `Host`, `Host 2`, "
+    "`Guest`, `Speaker 1` — and keep the same label for the same voice "
+    "throughout. A generic label is always correct; a guessed name is a "
+    "fabrication. If you name someone, you are asserting you have evidence for it."
+)
+
+ROSTER_RULE = (
+    "The people below are taken from the video's own published description. Use "
+    "these spellings when you can match a voice to one of them, and treat the "
+    "list as the only names you may assume are in this video — it is not "
+    "necessarily complete, so someone who is clearly not on it still gets a "
+    "generic label rather than a guessed name.\n\n"
+    "--- FROM THE VIDEO DESCRIPTION ---\n{description}\n--- END DESCRIPTION ---"
+)
+
 COMMENTS_PROMPT = (
     "You are given the COMPLETE set of comments fetched for a YouTube video — {n} "
     "comment(s), listed below. Analyze audience sentiment using ONLY these comments. "
@@ -69,6 +99,10 @@ COMMENTS_PROMPT = (
     "\n\n--- COMMENTS ({n} total) ---\n"
 )
 
+
+# A description is free-form and can run to thousands of characters of links and
+# sponsor copy; the participant list is always near the top.
+MAX_DESCRIPTION_CHARS = 2000
 
 # Modes whose output is a chronological list: chunk answers just concatenate.
 LIST_MODES = {"transcript", "claims"}
@@ -101,9 +135,28 @@ def timestamp_rule(duration: float | None = None) -> str:
     return TIMESTAMP_RULE.format(runtime=runtime)
 
 
-def video_body(text: str, duration: float | None = None) -> str:
-    """A video-mode prompt — preset or custom — with the timestamp rule appended."""
-    return f"{text}\n\n{timestamp_rule(duration)}"
+def roster_rule(description: str | None) -> str | None:
+    """The speaker-grounding block from a video description, or None."""
+    if not description or not description.strip():
+        return None
+    return ROSTER_RULE.format(description=description.strip()[:MAX_DESCRIPTION_CHARS])
+
+
+def video_body(
+    text: str, duration: float | None = None, description: str | None = None
+) -> str:
+    """A video-mode prompt — preset or custom — with the standing rules appended.
+
+    Every video-mode request carries the timestamp and speaker rules, custom
+    --prompt runs included: both guard against the model inventing detail that
+    looks like observation, and neither is something a caller should have to
+    remember to ask for.
+    """
+    parts = [text, timestamp_rule(duration), SPEAKER_RULE]
+    roster = roster_rule(description)
+    if roster:
+        parts.append(roster)
+    return "\n\n".join(parts)
 
 
 def make_client(model: str | None = None) -> genai.Client:

@@ -9,10 +9,12 @@ from google.genai import types
 
 from tubetell.gemini import (
     MODE_PROMPTS,
+    SPEAKER_RULE,
     comments_body,
     format_usage,
     generate,
     media_contents,
+    roster_rule,
     timestamp_rule,
     video_body,
 )
@@ -164,3 +166,31 @@ def test_request_config_disables_automatic_function_calling():
     from tubetell.gemini import request_config
 
     assert request_config().automatic_function_calling.disable is True
+
+
+def test_speaker_rule_forbids_guessing_and_offers_generic_labels():
+    assert "never infer a name" in SPEAKER_RULE.lower()
+    assert "`Speaker 1`" in SPEAKER_RULE
+    assert "a guessed name is a fabrication" in SPEAKER_RULE
+
+
+def test_every_video_body_carries_the_speaker_rule():
+    for prompt in MODE_PROMPTS.values():
+        assert SPEAKER_RULE in video_body(prompt, 90)
+    assert SPEAKER_RULE in video_body("Vem säger vad?", None)
+
+
+def test_roster_rule_only_appears_when_there_is_a_description():
+    assert roster_rule(None) is None
+    assert roster_rule("   ") is None
+
+    body = video_body("Transcribe.", 90, "MEDVERKANDE\nJacob Bursell\nHampus Brodén")
+    assert "Jacob Bursell" in body and "Hampus Brodén" in body
+    assert "FROM THE VIDEO DESCRIPTION" in body
+
+    assert "FROM THE VIDEO DESCRIPTION" not in video_body("Transcribe.", 90)
+
+
+def test_roster_rule_truncates_a_long_description():
+    rule = roster_rule("x" * 9000)
+    assert rule.count("x") == 2000

@@ -122,7 +122,7 @@ def test_analyze_sends_the_prompt_with_the_timestamp_rule(monkeypatch):
     sent = {}
     monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
-    monkeypatch.setattr(cli, "source_duration", lambda source: 5732.0)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (5732.0, None))
     def capture(client, *, model, contents, low_res=False):
         sent["c"] = contents
         return "ok"
@@ -139,9 +139,10 @@ def test_analyze_skips_the_runtime_when_a_clip_narrows_the_source(monkeypatch):
     sent = {}
     monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
-    monkeypatch.setattr(
-        cli, "source_duration", lambda source: pytest.fail("must not probe a clipped source")
-    )
+    # The facts still get fetched — the description grounds speaker names for a
+    # clip too — but the runtime must not reach the prompt, or the model would
+    # cite positions in the full video while watching only the clip.
+    monkeypatch.setattr(cli, "source_facts", lambda source: (5732.0, None))
     def capture(client, *, model, contents, low_res=False):
         sent["c"] = contents
         return "ok"
@@ -161,7 +162,7 @@ def test_analyze_drops_resolution_for_an_hour_long_video(monkeypatch):
     sent = {}
     monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
-    monkeypatch.setattr(cli, "source_duration", lambda source: 61 * 60.0)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (61 * 60.0, None))
 
     def capture(client, *, model, contents, low_res=False):
         sent["low_res"] = low_res
@@ -176,7 +177,7 @@ def test_analyze_splits_a_very_long_video_and_merges(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text=str(kw["clip"])))
-    monkeypatch.setattr(cli, "source_duration", lambda source: 6 * 3600.0)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (6 * 3600.0, None))
 
     def capture(client, *, model, contents, low_res=False):
         calls.append(contents)
@@ -194,7 +195,7 @@ def _agentic_env(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     monkeypatch.setattr(cli, "make_client", lambda *_: pytest.fail("Vertex client must not be built"))
     monkeypatch.setattr(cli, "generate", lambda *a, **kw: pytest.fail("generate must not run"))
-    monkeypatch.setattr(cli, "source_duration", lambda source: 3452.0)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (3452.0, None))
 
 
 def test_analyze_auto_takes_the_agentic_path_with_a_key(monkeypatch):
@@ -215,7 +216,7 @@ def test_analyze_auto_takes_the_agentic_path_with_a_key(monkeypatch):
 
 def test_analyze_auto_without_a_runtime_still_carries_the_timestamp_rule(monkeypatch):
     _agentic_env(monkeypatch)
-    monkeypatch.setattr(cli, "source_duration", lambda source: None)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (None, None))
     seen = {}
     monkeypatch.setattr(cli, "agentic_answer", lambda s, *, model, text: seen.update(text=text) or "ok")
     cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0)
@@ -238,7 +239,7 @@ def test_analyze_auto_is_silent_about_static_without_a_key(monkeypatch, capsys):
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
-    monkeypatch.setattr(cli, "source_duration", lambda source: 60.0)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (60.0, None))
     monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "static ok")
     cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0)
     assert "processing:" not in capsys.readouterr().err
@@ -249,7 +250,7 @@ def test_analyze_explicit_static_with_a_key_stays_on_vertex(monkeypatch, capsys)
     monkeypatch.setattr(cli, "agentic_answer", lambda *a, **kw: pytest.fail("agentic must not run"))
     monkeypatch.setattr(cli, "make_client", lambda *_: object())
     monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text="media"))
-    monkeypatch.setattr(cli, "source_duration", lambda source: 60.0)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (60.0, None))
     monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "static ok")
     assert cli.analyze("vOVKnYoH1p4", mode="summary", prompt=None, model="gemini-3.7-flash", max_comments=0, processing="static") == "static ok"
     assert "processing:" not in capsys.readouterr().err

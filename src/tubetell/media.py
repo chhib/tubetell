@@ -20,7 +20,7 @@ from pathlib import Path
 from google.genai import types
 
 from . import TubetellError
-from .youtube import fetch_duration, video_id
+from .youtube import fetch_video_facts, video_id
 
 # Vertex caps a generateContent request at 20 MB and inline bytes are
 # base64-encoded on the wire (+33%), so 12 MiB of media is the most that
@@ -258,19 +258,27 @@ def prepare_local(
     )
 
 
-def source_duration(source: str) -> float | None:
-    """Runtime of a source in seconds, or None when it can't be established.
+def source_facts(source: str) -> tuple[float | None, str | None]:
+    """A source's (runtime in seconds, published description), each None if unknown.
 
-    Best effort by design: it only exists to bound the timestamps in the prompt,
-    and the video modes must keep working without ffprobe (remote source) or a
-    YouTube API key (the comments mode's key, which video modes never need).
+    Best effort by design: both only exist to hold the prompt to what is real —
+    the runtime bounds its timestamps, the description grounds its speaker names
+    — and the video modes must keep working without ffprobe (remote source) or a
+    YouTube API key (the comments mode's key, which video modes never need). Only
+    a YouTube URL has a description at all; a local file or a gs:// object has no
+    roster to check names against, so those answers fall back to generic labels.
     """
     if looks_like_path(source):
         path = Path(source).expanduser()
-        return probe(path).get("duration") if path.is_file() else None
+        return (probe(path).get("duration") if path.is_file() else None), None
     if source.startswith("gs://"):
-        return None
-    return fetch_duration(source)
+        return None, None
+    return fetch_video_facts(source)
+
+
+def source_duration(source: str) -> float | None:
+    """Runtime of a source in seconds, or None when it can't be established."""
+    return source_facts(source)[0]
 
 
 def source_part(

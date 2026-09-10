@@ -280,6 +280,8 @@ def test_source_duration_is_none_for_a_missing_file_or_gcs_object(tmp_path):
 
 def test_source_duration_asks_youtube_for_a_remote_video(monkeypatch):
     seen = []
-    monkeypatch.setattr(media, "fetch_duration", lambda url: seen.append(url) or 1234.0)
+    monkeypatch.setattr(
+        media, "fetch_video_facts", lambda url: seen.append(url) or (1234.0, "desc")
+    )
     assert source_duration("https://youtu.be/vOVKnYoH1p4") == 1234.0
     assert seen == ["https://youtu.be/vOVKnYoH1p4"]

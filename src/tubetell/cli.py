@@ -59,7 +59,7 @@ from .media import (
     format_offset,
     looks_like_path,
     parse_clip,
-    source_duration,
+    source_facts,
     source_kind,
     source_part,
 )
@@ -100,9 +100,13 @@ def analyze(
     path = resolve_processing(processing, **conditions)
     # A clip leaves it ambiguous whether the model counts from the clip or from
     # the original video, so only an uncut source gets a runtime to cite against.
-    duration = None if span else source_duration(source)
+    # The description grounds speaker names and stays valid for a clip.
+    full_duration, description = source_facts(source)
+    duration = None if span else full_duration
     if path == "agentic":
-        return agentic_answer(source, model=model, text=video_body(request, duration))
+        return agentic_answer(
+            source, model=model, text=video_body(request, duration, description)
+        )
     reason = static_reason(**conditions) if processing == "auto" else None
     if reason:
         print(f"processing: static — {reason}", file=sys.stderr)
@@ -121,7 +125,7 @@ def analyze(
             fps=fps,
             clip=piece,
         )
-        text = video_body(request, runtime)
+        text = video_body(request, runtime, description)
         return generate(
             client, model=model, contents=media_contents(part, text), low_res=fit.low_res
         )
