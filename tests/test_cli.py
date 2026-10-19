@@ -378,3 +378,8 @@ def test_analyze_splits_a_long_local_file_without_trying_it_whole(tmp_path, monk
     cli.analyze(str(video), mode="summary", prompt=None, model="m", max_comments=0, processing="static")
     assert len(clips) == 5 and clips[-1][1] == 3493
     assert "too long for one proxy; splitting into 5 spans" in capsys.readouterr().err
+
+
+def test_list_spans_drop_the_models_preamble():
+    assert cli.drop_preamble("Here is the transcript:\n\n[00:01] a\n[00:02] b\n") == "[00:01] a\n[00:02] b"
+    assert cli.drop_preamble("no timestamps at all") == "no timestamps at all"

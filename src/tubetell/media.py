@@ -166,14 +166,17 @@ def format_offset(seconds: float) -> str:
     return f"{minutes}:{secs:02d}"
 
 
-TIMESTAMP = re.compile(r"\[(?:(\d+):)?(\d{1,2}):(\d{2})\]")
+BRACKETED = re.compile(r"\[[^\[\]\n]*\]")
+TIMESTAMP = re.compile(r"(?<![\d:])(?:(\d+):)?(\d{1,2}):(\d{2})(?![\d:])")
 
 
 def shift_timestamps(text: str, offset: int) -> str:
-    """Move every `[mm:ss]` / `[h:mm:ss]` in an answer `offset` seconds later.
+    """Move every bracketed timestamp in an answer `offset` seconds later.
 
     A proxy cut from the middle of a file starts at 0:00, so the model's
     timestamps count from the cut; this puts them back on the source's clock.
+    Both `[mm:ss]` / `[h:mm:ss]` and ranges inside one bracket
+    (`[05:00 - 06:14]`) are moved; a time outside brackets is left alone.
     """
     if not offset:
         return text
@@ -182,9 +185,9 @@ def shift_timestamps(text: str, offset: int) -> str:
         hours, minutes, seconds = (int(g) if g else 0 for g in m.groups())
         hours, rest = divmod(hours * 3600 + minutes * 60 + seconds + offset, 3600)
         minutes, seconds = divmod(rest, 60)
-        return f"[{hours}:{minutes:02d}:{seconds:02d}]" if hours else f"[{minutes:02d}:{seconds:02d}]"
+        return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
 
-    return TIMESTAMP.sub(move, text)
+    return BRACKETED.sub(lambda g: TIMESTAMP.sub(move, g.group(0)), text)
 
 
 def parse_clip(text: str) -> tuple[int, int]:

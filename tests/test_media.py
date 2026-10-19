@@ -313,3 +313,12 @@ def test_only_a_file_well_over_the_cap_is_split_up_front():
     assert predicted_spans(20 * 60) is None  # ~15 MiB: worth trying the ladder
     assert predicted_spans(3493) == 5
     assert predicted_spans(7474) == 10
+
+
+def test_shift_timestamps_moves_ranges_inside_one_bracket():
+    from tubetell.media import shift_timestamps
+
+    # Seen in a merged summary: span-relative ranges left on the span's clock.
+    assert shift_timestamps("[00:00–02:48] a, [12:00 - 1:00:30] b, 3:15 pm", 600) == (
+        "[10:00–12:48] a, [22:00 - 1:10:30] b, 3:15 pm"
+    )
