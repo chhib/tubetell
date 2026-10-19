@@ -1,7 +1,7 @@
 # tubetell
 
-Ask Gemini anything about a video — a YouTube URL, a `gs://` object, or a file
-on your disk.
+Ask Gemini anything about a video — a YouTube URL, a `gs://` object, a file
+on your disk, or a post on X (or any other site yt-dlp can download).
 
 Gemini reads the video itself (no download, no transcription step) and answers
 a prompt about the content: what's said, what's shown, what's claimed, how the
@@ -23,6 +23,8 @@ tubetell <url> --prompt "What products are recommended, and by whom?"
 
 tubetell ~/screen-recording.mov --prompt "What did I click, and when?"
 tubetell gameplay.mov --fps 2 --clip 1:30-2:45      # static: exact frames, one span
+
+tubetell https://x.com/<user>/status/<id> --mode transcript --out t.md   # downloaded first
 ```
 
 ## Modes
@@ -142,6 +144,7 @@ truncated transcript.
 | YouTube | `https://youtu.be/vOVKnYoH1p4`, `vOVKnYoH1p4` | agentic: the URL goes to the Interactions API; static: Vertex fetches it (public videos only) |
 | Cloud Storage | `gs://my-bucket/clip.mp4` | Vertex only — a URI it reads from the bucket (static) |
 | Local file | `~/recording.mov`, `clip.mp4` | agentic: uploaded as-is via the Files API; static: proxied by ffmpeg, then sent inline |
+| Any other video page | `https://x.com/<user>/status/<id>`, Vimeo | downloaded once with yt-dlp, then read as a local file |
 
 Local video and audio both work — `.mov`, `.mp4`, `.webm`, `.mkv`, `.avi`,
 `.mpeg`, `.flv`, `.wmv`, `.3gp`, `.mp3`, `.wav`, `.m4a`, `.aac`, `.ogg`,
@@ -149,6 +152,17 @@ Local video and audio both work — `.mov`, `.mp4`, `.webm`, `.mkv`, `.avi`,
 an audio part — the on-demand `processing` mode is video-only, so audio is
 tokenized in full (about 32 tokens a second). Only `--mode comments` is
 YouTube-only; it reads a comment section, which a local file doesn't have.
+
+### Other sites: downloaded with yt-dlp
+
+Vertex reads a YouTube URL by reference, but an X post or a Vimeo page is just
+HTML to it. Any other `http(s)` URL is therefore downloaded with `yt-dlp`
+(`brew install yt-dlp`) into `$TMPDIR/tubetell-downloads/`, keyed by URL, and
+then handled exactly like a local file — a second run on the same URL skips
+the download. tubetell asks for at most 720p (the proxy is 640–1280px anyway)
+and eight concurrent fragments: X serves video as HLS fragments, and an hour
+at 1080p one fragment at a time took nine minutes. The post's text from
+yt-dlp's info JSON is the speaker roster, the way a YouTube description is.
 
 ### Local files, agentic: the Files API
 
@@ -182,8 +196,21 @@ tubetell clip.mov --processing static --width 1920    # sharper proxy, bigger re
 tubetell clip.mov --processing static --no-transcode  # send as-is; fails if over ~12 MiB
 ```
 
-If even the coarsest proxy won't fit — an hour of footage, say — tubetell says
-so and tells you to work in pieces with `--clip`.
+If even the coarsest proxy won't fit — an hour of footage, say — tubetell
+splits the runtime into equal spans sized so each fits at 640px / 1 fps (20%
+under the cap, since some stretches compress worse than others), sends them one
+after another, and stitches the answers back together. Each span's proxy
+starts at 0:00, so its timestamps are shifted back onto the source's clock.
+`transcript` and `claims` are concatenated in order; other modes get one merge
+request. A file whose estimated proxy (about 0.75 MiB a minute at 640px / 1
+fps) is more than twice the cap skips the whole-file attempts and is split
+straight away. A 58-minute talk came out as five spans of about 11½ minutes,
+each an 8–9 MiB proxy; trying it whole first had cost four full transcodes.
+
+Spans are sent one at a time on purpose. Four 15-minute spans sent in parallel
+spent the project's tokens-per-minute quota (429) and one of them hung; tubetell
+now waits out a 429 (30 s, then doubling) and gives any request ten minutes
+before retrying it.
 
 ### Framing what Gemini looks at (static)
 
@@ -399,8 +426,9 @@ see this, something else in your environment is setting `media_resolution`.
 
 **Long videos (static).** Cost and latency scale with video length, not with
 the question — see [Cost](#cost). A local file that no proxy can squeeze under
-the request cap has to be worked in `--clip` slices — or set `GEMINI_API_KEY`
-and let agentic mode read it whole.
+the request cap is split into spans automatically (see
+[the proxy](#local-files-static-the-proxy)) — or set `GEMINI_API_KEY` and let
+agentic mode read it whole.
 
 **Private/unlisted videos** can't be analyzed — both paths fetch the video
 server-side and only public videos are supported. Download it and pass the

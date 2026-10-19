@@ -295,3 +295,86 @@ def test_vertex_404_is_reported_without_a_location_hint(tmp_path, monkeypatch):
         run_main(monkeypatch, ["vOVKnYoH1p4", "--processing", "static"])
     assert "Vertex AI error 404" in str(e.value)
     assert "hint" not in str(e.value)
+
+
+def test_analyze_splits_a_local_file_no_proxy_fits(tmp_path, monkeypatch, capsys):
+    # Too short to predict, but this footage turns out dense: the ladder runs,
+    # fails, and its measured sizes decide the spans.
+    from tubetell.media import INLINE_LIMIT, TooBigError
+
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    seen = []
+
+    def part(source, **kw):
+        if kw["clip"] is None:
+            raise TooBigError(
+                "too big",
+                sizes={(1280, 2.0): 6 * INLINE_LIMIT, (640, 1.0): 3 * INLINE_LIMIT},
+                duration=1500.0,
+            )
+        seen.append((kw["clip"], kw["width"], kw["proxy_fps"]))
+        return types.Part(text="media")
+
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
+    monkeypatch.setattr(cli, "source_part", part)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (1500.0, None))
+    monkeypatch.setattr(
+        cli, "generate", lambda client, *, model, contents, low_res=False: "[00:10] line"
+    )
+    out = cli.analyze(str(video), mode="transcript", prompt=None, model="m", max_comments=0, processing="static")
+
+    clips = [c for c, _, _ in seen]
+    assert len(clips) == 4  # 3 x cap, aimed 20% under -> 4 spans
+    assert clips[0][0] == 0 and clips[-1][1] == 1500
+    assert all(w == 640 and f == 1.0 for _, w, f in seen)
+    # Transcripts concatenate (no merge call) and each span is put back on the
+    # source's clock.
+    first = clips[1][0]
+    assert out.split("\n\n")[1] == f"[{first // 60:02d}:{first % 60 + 10:02d}] line"
+    assert "splitting into 4 spans" in capsys.readouterr().err
+
+
+def test_analyze_downloads_a_non_youtube_url_and_uses_the_post_as_roster(tmp_path, monkeypatch):
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"x")
+    monkeypatch.setattr(cli, "fetch", lambda url: (video, "Talk with Lauren Tan"))
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
+    monkeypatch.setattr(cli, "source_part", lambda source, **kw: types.Part(text=source))
+    monkeypatch.setattr(cli, "source_facts", lambda source: (60.0, None))
+    seen = {}
+
+    def capture(client, *, model, contents, low_res=False):
+        seen["media"], seen["text"] = contents.parts[0].text, contents.parts[1].text
+        return "ok"
+
+    monkeypatch.setattr(cli, "generate", capture)
+    cli.analyze("https://x.com/a/status/1", mode="summary", prompt=None, model="m", max_comments=0, processing="static")
+    assert seen["media"] == str(video)
+    assert "Talk with Lauren Tan" in seen["text"]
+
+
+def test_analyze_comments_mode_rejects_a_non_youtube_url(monkeypatch):
+    with pytest.raises(TubetellError, match="YouTube URL"):
+        cli.analyze("https://x.com/a/status/1", mode="comments", prompt=None, model="m", max_comments=5)
+
+
+def test_analyze_splits_a_long_local_file_without_trying_it_whole(tmp_path, monkeypatch, capsys):
+    # The 58-min talk: four whole-file transcodes, all too big, took longer
+    # than the analysis itself.
+    video = tmp_path / "talk.mp4"
+    video.write_bytes(b"x")
+    clips = []
+
+    def part(source, **kw):
+        assert kw["clip"] is not None, "the whole file must not be proxied"
+        clips.append(kw["clip"])
+        return types.Part(text="media")
+
+    monkeypatch.setattr(cli, "make_client", lambda *_: object())
+    monkeypatch.setattr(cli, "source_part", part)
+    monkeypatch.setattr(cli, "source_facts", lambda source: (3493.0, None))
+    monkeypatch.setattr(cli, "generate", lambda client, *, model, contents, low_res=False: "ok")
+    cli.analyze(str(video), mode="summary", prompt=None, model="m", max_comments=0, processing="static")
+    assert len(clips) == 5 and clips[-1][1] == 3493
+    assert "too long for one proxy; splitting into 5 spans" in capsys.readouterr().err

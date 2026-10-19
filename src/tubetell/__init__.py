@@ -1,6 +1,6 @@
-"""tubetell — ask Gemini anything about a video: YouTube, gs://, or a local file."""
+"""tubetell — ask Gemini anything about a video: YouTube, gs://, a local file, or any page yt-dlp can download."""
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 
 class TubetellError(Exception):

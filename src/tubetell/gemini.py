@@ -159,6 +159,16 @@ def video_body(
     return "\n\n".join(parts)
 
 
+# A static request on an inline proxy normally answers in one to three minutes.
+# Without a deadline, a connection Vertex stops answering hangs forever — seen
+# on one span of four sent in parallel; ten minutes turns that into a retry.
+REQUEST_TIMEOUT_MS = 10 * 60 * 1000
+
+# A 429 means the project's tokens-per-minute quota is spent; a few seconds is
+# not long enough for it to refill.
+QUOTA_DELAY = 30.0
+
+
 def make_client(model: str | None = None) -> genai.Client:
     """Vertex-mode client from env config.
 
@@ -183,7 +193,12 @@ def make_client(model: str | None = None) -> genai.Client:
             "GOOGLE_CLOUD_PROJECT is not set. Export it, or put it in a .env file "
             "in the directory you run tubetell from, or in ~/.config/tubetell/.env."
         )
-    return genai.Client(vertexai=True, project=project, location=location)
+    return genai.Client(
+        vertexai=True,
+        project=project,
+        location=location,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
 
 
 def format_usage(usage) -> str | None:
@@ -233,12 +248,13 @@ def _truncated(resp) -> bool:
 def generate(
     client: genai.Client, *, model: str, contents, low_res: bool = False
 ) -> str:
-    """generate_content with backoff on transient server and transport errors.
+    """generate_content with backoff on transient server, quota and transport errors.
 
-    Two things fail intermittently and both clear on a retry: Vertex re-fetches
+    Three things fail intermittently and all clear on a retry: Vertex re-fetches
     a YouTube URL on every call, and hammering the same video in a short window
-    gets it rate-limited downstream as a 500 INTERNAL; and a request carrying
-    inline media sometimes has its connection dropped mid-upload.
+    gets it rate-limited downstream as a 500 INTERNAL; a request carrying inline
+    media sometimes has its connection dropped mid-upload or never answered; and
+    several big requests close together exhaust the per-minute token quota (429).
     """
     delay = 4.0
     last: Exception | None = None
@@ -260,7 +276,17 @@ def generate(
         except genai_errors.ClientError as exc:
             if exc.code == 400 and "token count exceeds" in str(exc.message or exc):
                 raise TubetellError(f"Vertex AI error 400: {exc.message}\n{TOKEN_LIMIT_HINT}")
-            raise
+            if exc.code != 429:
+                raise
+            last = exc
+            delay = max(delay, QUOTA_DELAY)
+            if attempt < 3:
+                print(
+                    f"  quota 429; retrying in {delay:.0f}s (attempt {attempt + 1}/3)...",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                delay *= 2
         except (genai_errors.ServerError, httpx.TransportError) as exc:  # transient
             last = exc
             if attempt < 3:
@@ -276,7 +302,7 @@ def generate(
         f"Vertex kept failing: {last}\n"
         "For a YouTube source this is usually the URL being rate-limited from "
         "repeated fetches; for a local file it is usually the upload being cut "
-        "off. Wait a minute and retry."
+        "off; a 429 is the project's per-minute token quota. Wait a minute and retry."
     )
 
 

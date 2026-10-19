@@ -285,3 +285,31 @@ def test_source_duration_asks_youtube_for_a_remote_video(monkeypatch):
     )
     assert source_duration("https://youtu.be/vOVKnYoH1p4") == 1234.0
     assert seen == ["https://youtu.be/vOVKnYoH1p4"]
+
+
+def test_shift_timestamps_moves_both_formats_onto_the_source_clock():
+    from tubetell.media import shift_timestamps
+
+    text = "[00:15] a\n[14:59]-[15:01] b\n[1:00:00] c\nno [brackets] here"
+    assert shift_timestamps(text, 2700) == (
+        "[45:15] a\n[59:59]-[1:00:01] b\n[1:45:00] c\nno [brackets] here"
+    )
+    assert shift_timestamps(text, 0) == text
+
+
+def test_too_big_error_sizes_spans_for_the_chunk_rung_or_the_coarsest():
+    from tubetell.media import INLINE_LIMIT, TooBigError
+
+    err = TooBigError("x", sizes={(640, 1.0): 41 * 2**20, (480, 0.5): 33 * 2**20}, duration=3493)
+    assert err.pieces() == (5, (640, 1.0))
+    err = TooBigError("x", sizes={(480, 0.5): INLINE_LIMIT + 1}, duration=100)
+    assert err.pieces() == (2, (480, 0.5))
+
+
+def test_only_a_file_well_over_the_cap_is_split_up_front():
+    from tubetell.media import predicted_spans
+
+    assert predicted_spans(None) is None
+    assert predicted_spans(20 * 60) is None  # ~15 MiB: worth trying the ladder
+    assert predicted_spans(3493) == 5
+    assert predicted_spans(7474) == 10

@@ -1,6 +1,8 @@
 """tubetell — ask Gemini anything about a video.
 
-The source can be a YouTube URL, a `gs://` object, or a local video/audio file.
+The source can be a YouTube URL, a `gs://` object, a local video/audio file, or
+any other page yt-dlp can download (an X post, Vimeo, ...), which is fetched
+once to a cache and then read as a local file.
 Gemini reads the video itself (no download, no transcript step), through one of
 two paths picked by --processing:
     agentic     the Interactions API on the Gemini Developer API (GEMINI_API_KEY);
@@ -45,6 +47,7 @@ from .config import (
     static_reason,
 )
 from .budget import plan
+from .download import fetch, is_downloadable
 from .gemini import (
     LIST_MODES,
     MODE_PROMPTS,
@@ -58,7 +61,11 @@ from .gemini import (
 from .media import (
     format_offset,
     looks_like_path,
+    CHUNK_RUNG,
+    TooBigError,
     parse_clip,
+    predicted_spans,
+    shift_timestamps,
     source_facts,
     source_kind,
     source_part,
@@ -80,14 +87,18 @@ def analyze(
     processing: str = "auto",
 ) -> str:
     if mode == "comments":
-        if looks_like_path(source):
+        if looks_like_path(source) or is_downloadable(source):
             raise TubetellError(
                 "The comments mode reads a YouTube comment section, so it needs a "
-                "YouTube URL — a local file has none."
+                "YouTube URL — a local file or another site has none."
             )
         client = make_client(model)
         comments, n = fetch_comments(source, max_comments)
         return generate(client, model=model, contents=comments_body(comments, n, prompt))
+    post_text = None
+    if is_downloadable(source):
+        path, post_text = fetch(source)
+        source = str(path)
     span = parse_clip(clip) if clip else None
     request = prompt or MODE_PROMPTS[mode]
     conditions = dict(
@@ -102,6 +113,7 @@ def analyze(
     # the original video, so only an uncut source gets a runtime to cite against.
     # The description grounds speaker names and stays valid for a clip.
     full_duration, description = source_facts(source)
+    description = description or post_text
     duration = None if span else full_duration
     if path == "agentic":
         return agentic_answer(
@@ -116,32 +128,70 @@ def analyze(
         fps=fps,
         clip=span,
     )
+    # A local span is cut by the proxy and starts at 0:00, so its answer counts
+    # from the cut and its own length is the runtime to cite against.
+    local = source_kind(source) == "local"
 
-    def ask(piece: tuple[int, int] | None, runtime: float | None) -> str:
+    def ask(
+        piece: tuple[int, int] | None,
+        runtime: float | None,
+        rung: tuple[int, float] | None = None,
+    ) -> str:
         part = source_part(
             source,
             transcode_enabled=transcode,
-            width=width,
+            width=rung[0] if rung else width,
             fps=fps,
             clip=piece,
+            proxy_fps=rung[1] if rung else None,
         )
         text = video_body(request, runtime, description)
         return generate(
             client, model=model, contents=media_contents(part, text), low_res=fit.low_res
         )
 
-    if not fit.chunked:
-        return ask(span, duration)
+    def split(start: int, end: int, n: int, why: str, rung: tuple[int, float]) -> tuple[tuple[int, int], ...]:
+        step = -(-(end - start) // n)
+        clips = tuple((a, min(a + step, end)) for a in range(start, end, step))
+        print(
+            f"  {why}; splitting into {len(clips)} spans of ~{format_offset(step)} "
+            f"at {rung[0]}px {rung[1]:g}fps.",
+            file=sys.stderr,
+        )
+        return clips
 
-    print(
-        f"  runtime {format_offset(duration or fit.clips[-1][1])} needs "
-        f"{len(fit.clips)} requests; analyzing each span, then merging.",
-        file=sys.stderr,
-    )
+    clips, rung = fit.clips, None
+    whole = span or ((0, int(round(full_duration))) if full_duration else None)
+    n = predicted_spans(whole[1] - whole[0]) if (local and transcode and whole) else None
+    if not fit.chunked and n:
+        rung = CHUNK_RUNG
+        clips = split(*whole, n, "too long for one proxy", rung)
+    elif not fit.chunked:
+        try:
+            return ask(span, duration)
+        except TooBigError as exc:
+            if not transcode:
+                raise
+            start, end = span or (0, int(round(exc.duration or full_duration or 0)))
+            if end <= start:
+                raise
+            n, rung = exc.pieces()
+            clips = split(start, end, n, "no single proxy fits", rung)
+    else:
+        print(
+            f"  runtime {format_offset(duration or fit.clips[-1][1])} needs "
+            f"{len(fit.clips)} requests; analyzing each span, then merging.",
+            file=sys.stderr,
+        )
     answers = []
-    for a, b in fit.clips:
+    for a, b in clips:
         print(f"  span {format_offset(a)}-{format_offset(b)}", file=sys.stderr)
-        answers.append(((a, b), ask((a, b), None)))
+        text = ask((a, b), (b - a) if local else None, rung)
+        answers.append(((a, b), shift_timestamps(text, a) if local else text))
+    if mode in LIST_MODES and not prompt:
+        # Chronological lists concatenate cleanly, and a model merge of a full
+        # transcript would run into the output cap and get summarized.
+        return "\n\n".join(text.strip() for _, text in answers)
     return generate(client, model=model, contents=merge_body(request, answers))
 
 
@@ -153,7 +203,8 @@ def main() -> None:
     )
     p.add_argument(
         "source",
-        help="YouTube URL, youtu.be link, bare video id, gs:// URI, or a local video/audio file",
+        help="YouTube URL, youtu.be link, bare video id, gs:// URI, a local video/audio "
+        "file, or another video page yt-dlp can download (x.com, vimeo.com, ...)",
     )
     p.add_argument("--mode", default="summary", choices=list(MODE_PROMPTS) + ["comments"])
     p.add_argument("--prompt", help="override the mode preset with a custom prompt")

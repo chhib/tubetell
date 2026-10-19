@@ -194,3 +194,31 @@ def test_roster_rule_only_appears_when_there_is_a_description():
 def test_roster_rule_truncates_a_long_description():
     rule = roster_rule("x" * 9000)
     assert rule.count("x") == 2000
+
+
+def test_generate_waits_out_a_spent_token_quota(monkeypatch):
+    delays = []
+    monkeypatch.setattr("tubetell.gemini.time.sleep", delays.append)
+
+    class QuotaModels:
+        calls = 0
+
+        def generate_content(self, *, model, contents, config=None):
+            QuotaModels.calls += 1
+            if QuotaModels.calls == 1:
+                raise genai_errors.ClientError(429, {"error": {"message": "TPM quota exhausted"}})
+            return SimpleNamespace(text="ok")
+
+    assert generate(SimpleNamespace(models=QuotaModels()), model="m", contents="c") == "ok"
+    assert delays == [30.0]
+
+
+def test_generate_does_not_retry_other_client_errors(monkeypatch):
+    monkeypatch.setattr("tubetell.gemini.time.sleep", lambda _: pytest.fail("no retry"))
+
+    class Forbidden:
+        def generate_content(self, *, model, contents, config=None):
+            raise genai_errors.ClientError(403, {"error": {"message": "denied"}})
+
+    with pytest.raises(genai_errors.ClientError):
+        generate(SimpleNamespace(models=Forbidden()), model="m", contents="c")

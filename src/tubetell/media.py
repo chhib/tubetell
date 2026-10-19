@@ -51,6 +51,57 @@ MIME_BY_SUFFIX = {
 # the inline cap: coarser frames, then a smaller frame.
 PROXY_LADDER = ((960, 1.0), (640, 1.0), (480, 0.5))
 
+# When nothing on the ladder fits, the caller splits the runtime instead, sized
+# so this rung fits: 640px at 1 fps still reads slides and on-screen code, which
+# the 480px / 0.5 fps rung starts to lose.
+CHUNK_RUNG = (640, 1.0)
+
+
+# What a talk costs at CHUNK_RUNG: two hour-long talks proxied to 41-42 MiB, so
+# 0.75 MiB a minute leaves some margin. Only used to skip a ladder that can't
+# succeed — the spans are still proxied and checked one by one.
+CHUNK_RUNG_BYTES_PER_SEC = 0.75 * 1024 * 1024 / 60
+
+
+def span_count(size: float) -> int:
+    """Equal spans needed so each carries at most 80% of the inline cap.
+
+    Bytes don't spread evenly over a runtime — a slide-heavy stretch compresses
+    better than a demo — hence the margin.
+    """
+    return max(2, -(-int(size) // int(INLINE_LIMIT * 0.8)))
+
+
+def predicted_spans(duration: float | None) -> int | None:
+    """Spans to split a local file into up front, or None to try it whole first.
+
+    Transcoding a whole hour four times just to learn it won't fit took longer
+    than analyzing it, so a file twice the cap at CHUNK_RUNG skips straight to
+    splitting.
+    """
+    if not duration:
+        return None
+    size = duration * CHUNK_RUNG_BYTES_PER_SEC
+    return span_count(size) if size > 2 * INLINE_LIMIT else None
+
+
+class TooBigError(TubetellError):
+    """No proxy fits one request; carries what it takes to split the file instead.
+
+    `sizes` maps each proxy rung tried, as (width, fps), to its size in bytes.
+    """
+
+    def __init__(self, message: str, *, sizes: dict[tuple[int, float], int], duration: float | None):
+        super().__init__(message)
+        self.sizes = sizes
+        self.duration = duration
+
+    def pieces(self, rung: tuple[int, float] = CHUNK_RUNG) -> tuple[int, tuple[int, float]]:
+        """How many equal spans make `rung` fit (or the coarsest rung tried), and that rung."""
+        if rung not in self.sizes:
+            rung = list(self.sizes)[-1]
+        return span_count(self.sizes[rung]), rung
+
 
 def is_remote(source: str) -> bool:
     """True for sources passed by reference (YouTube page, GCS object), not uploaded."""
@@ -113,6 +164,27 @@ def format_offset(seconds: float) -> str:
     if hours:
         return f"{hours}:{minutes:02d}:{secs:02d}"
     return f"{minutes}:{secs:02d}"
+
+
+TIMESTAMP = re.compile(r"\[(?:(\d+):)?(\d{1,2}):(\d{2})\]")
+
+
+def shift_timestamps(text: str, offset: int) -> str:
+    """Move every `[mm:ss]` / `[h:mm:ss]` in an answer `offset` seconds later.
+
+    A proxy cut from the middle of a file starts at 0:00, so the model's
+    timestamps count from the cut; this puts them back on the source's clock.
+    """
+    if not offset:
+        return text
+
+    def move(m: re.Match) -> str:
+        hours, minutes, seconds = (int(g) if g else 0 for g in m.groups())
+        hours, rest = divmod(hours * 3600 + minutes * 60 + seconds + offset, 3600)
+        minutes, seconds = divmod(rest, 60)
+        return f"[{hours}:{minutes:02d}:{seconds:02d}]" if hours else f"[{minutes:02d}:{seconds:02d}]"
+
+    return TIMESTAMP.sub(move, text)
 
 
 def parse_clip(text: str) -> tuple[int, int]:
@@ -235,12 +307,14 @@ def prepare_local(
         return path.read_bytes(), mime, clip
 
     attempts = [(width, fps)] + [rung for rung in PROXY_LADDER if rung[0] < width]
+    sizes: dict[tuple[int, float], int] = {}
     for attempt_width, attempt_fps in dict.fromkeys(attempts):
         proxy = _proxy_path(path, attempt_width, attempt_fps, clip)
         if not proxy.exists():
             _log(quiet, f"proxying {path.name} -> {attempt_width}px {attempt_fps:g}fps...")
             transcode(path, proxy, width=attempt_width, fps=attempt_fps, clip=clip)
         proxy_size = proxy.stat().st_size
+        sizes[(attempt_width, attempt_fps)] = proxy_size
         if proxy_size <= INLINE_LIMIT:
             _log(
                 quiet,
@@ -252,9 +326,11 @@ def prepare_local(
 
     duration = probe(path).get("duration")
     span = f" It runs {duration / 60:.0f} min." if duration else ""
-    raise TubetellError(
+    raise TooBigError(
         f"{path.name} won't fit in a request even at the lowest proxy settings.{span} "
-        "Analyze it in pieces with --clip START-END."
+        "Analyze it in pieces with --clip START-END.",
+        sizes=sizes,
+        duration=duration,
     )
 
 
@@ -289,8 +365,13 @@ def source_part(
     fps: float | None = None,
     clip: tuple[int, int] | None = None,
     quiet: bool = False,
+    proxy_fps: float | None = None,
 ) -> types.Part:
-    """The media half of the request: a URI reference or inline bytes."""
+    """The media half of the request: a URI reference or inline bytes.
+
+    `proxy_fps` sets the frame rate of a local file's proxy without also asking
+    Gemini to sample at it, which `fps` does.
+    """
     kind = source_kind(source)
     if kind == "local":
         path = Path(source).expanduser()
@@ -302,7 +383,7 @@ def source_part(
             path,
             transcode_enabled=transcode_enabled,
             width=width,
-            fps=fps if fps is not None else 2.0,
+            fps=proxy_fps or (fps if fps is not None else 2.0),
             clip=clip,
             quiet=quiet,
         )
