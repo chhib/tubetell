@@ -73,6 +73,17 @@ from .media import (
 from .youtube import fetch_comments
 
 
+def drop_preamble(text: str) -> str:
+    """A span's list answer without the "Here is the transcript:" line before it.
+
+    Harmless once at the top of an answer, but in a concatenation of spans it
+    reappears mid-transcript, so lines before the first timestamped one go.
+    """
+    lines = text.strip().splitlines()
+    first = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")), 0)
+    return "\n".join(lines[first:]).strip()
+
+
 def analyze(
     source: str,
     *,
@@ -191,7 +202,7 @@ def analyze(
     if mode in LIST_MODES and not prompt:
         # Chronological lists concatenate cleanly, and a model merge of a full
         # transcript would run into the output cap and get summarized.
-        return "\n\n".join(text.strip() for _, text in answers)
+        return "\n\n".join(drop_preamble(text) for _, text in answers)
     return generate(client, model=model, contents=merge_body(request, answers))
 
 
