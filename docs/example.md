@@ -137,7 +137,7 @@ tokens: 287,833 in + 1,791 thinking + 640 out = 290,264 total
 > [...]
 
 The whole six-run suite cost about $0.57 at July 2026 `gemini-2.5-flash` rates
-— see the [Cost section in the README](../README.md#cost).
+— see the [Cost section of the Gemini provider docs](providers/gemini.md#cost).
 
 ## Agentic runs (`gemini-3.7-flash`)
 
@@ -294,7 +294,7 @@ tokens: 234 in + 1,564 thinking + 280 tool + 885 out = 2,963 total
 Five video runs: ~1.45M tokens static, ~26k agentic. Note that most of the
 agentic total is thinking and output, which are billed at the output rate, so
 the cost drop is smaller than the token drop — see the
-[Cost section in the README](../README.md#cost).
+[Cost section of the Gemini provider docs](providers/gemini.md#cost).
 
 ### A longer video
 
