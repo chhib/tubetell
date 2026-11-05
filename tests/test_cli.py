@@ -383,3 +383,84 @@ def test_analyze_splits_a_long_local_file_without_trying_it_whole(tmp_path, monk
 def test_list_spans_drop_the_models_preamble():
     assert cli.drop_preamble("Here is the transcript:\n\n[00:01] a\n[00:02] b\n") == "[00:01] a\n[00:02] b"
     assert cli.drop_preamble("no timestamps at all") == "no timestamps at all"
+
+
+# --- --provider azure --------------------------------------------------------
+
+
+@pytest.fixture
+def azure_env(tmp_path, monkeypatch):
+    for k in ("AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_CHAT_DEPLOYMENT", "AZURE_OPENAI_API_KEY",
+              "GEMINI_API_KEY", "GOOGLE_CLOUD_PROJECT"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
+
+
+def test_provider_defaults_to_gemini(azure_env, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(cli, "analyze_azure", lambda *a, **kw: pytest.fail("not azure"))
+    seen = {}
+    monkeypatch.setattr(cli, "analyze", lambda url, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["vOVKnYoH1p4"])
+    assert seen["model"] == "gemini-3.8-flash"
+
+
+def test_azure_without_endpoint_is_a_clear_error_and_needs_no_gemini_creds(azure_env, monkeypatch):
+    with pytest.raises(SystemExit) as exc:
+        run_main(monkeypatch, ["meeting.mp4", "--provider", "azure"])
+    msg = str(exc.value)
+    assert "AZURE_OPENAI_ENDPOINT is not set" in msg
+    assert "GEMINI_API_KEY" not in msg
+
+
+def test_azure_comments_mode_is_rejected(azure_env, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    with pytest.raises(SystemExit, match="not available with --provider azure"):
+        run_main(monkeypatch, ["vOVKnYoH1p4", "--provider", "azure", "--mode", "comments"])
+
+
+def test_azure_rejects_gs_and_processing(azure_env, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    with pytest.raises(SystemExit, match="gs://"):
+        run_main(monkeypatch, ["gs://b/v.mp4", "--provider", "azure"])
+    with pytest.raises(SystemExit, match="does not apply to --provider azure"):
+        run_main(monkeypatch, ["v.mp4", "--provider", "azure", "--processing", "static"])
+
+
+def test_azure_local_file_goes_to_the_pipeline_with_model_override(azure_env, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    monkeypatch.setattr(cli, "fetch", lambda url: pytest.fail("no download for a file"))
+    seen = {}
+    monkeypatch.setattr(
+        cli.foundry, "answer", lambda path, **kw: seen.update(kw, path=path) or "ok"
+    )
+    run_main(
+        monkeypatch,
+        ["rec.mov", "--provider", "azure", "--model", "my-chat", "--clip", "1:30-2:45", "--fps", "1"],
+    )
+    assert seen["path"].name == "rec.mov"
+    assert seen["model"] == "my-chat"
+    assert seen["clip"] == (90, 165)
+    assert seen["fps"] == 1.0
+    assert seen["mode"] == "summary"
+
+
+def test_azure_downloads_youtube_first_and_keeps_its_description(azure_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    fetched = []
+    monkeypatch.setattr(
+        cli, "fetch", lambda url: fetched.append(url) or (tmp_path / "video.mp4", "Host: Ada")
+    )
+    seen = {}
+    monkeypatch.setattr(cli.foundry, "answer", lambda path, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["vOVKnYoH1p4", "--provider", "azure"])
+    assert fetched == ["https://www.youtube.com/watch?v=vOVKnYoH1p4"]
+    assert seen["description"] == "Host: Ada"
+    assert seen["model"] is None
+
+
+def test_help_lists_the_provider_choice(monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        run_main(monkeypatch, ["--help"])
+    assert "--provider {gemini,azure}" in capsys.readouterr().out
