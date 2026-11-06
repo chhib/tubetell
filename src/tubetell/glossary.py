@@ -122,7 +122,7 @@ def correct(client, cfg, segments: list[Segment], terms: list[str]) -> list[Segm
     if not segments:
         return segments
     print(f"glossary: checking {len(segments)} lines against {len(terms)} terms...", file=sys.stderr)
-    answer = ask(client, cfg, [{"type": "text", "text": correction_request(segments, terms)}])
+    answer = ask(client, cfg, [{"type": "text", "text": correction_request(segments, terms)}])[0]
     changes = _parse(answer)
     if changes is None:
         print("glossary: the model's answer was not JSON; transcript left as it is", file=sys.stderr)

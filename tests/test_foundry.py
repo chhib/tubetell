@@ -410,19 +410,22 @@ def _chat_client(text="The answer.", finish="stop", calls=None):
     def create(**kw):
         if calls is not None:
             calls.append(kw)
-        return SimpleNamespace(
+        parsed = SimpleNamespace(
             choices=[SimpleNamespace(finish_reason=finish, message=SimpleNamespace(content=text))],
             usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
         )
+        return SimpleNamespace(headers={}, parse=lambda: parsed)
 
-    return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    completions = SimpleNamespace(with_raw_response=SimpleNamespace(create=create))
+    return SimpleNamespace(chat=SimpleNamespace(completions=completions))
 
 
 def test_ask_sends_one_user_message_to_the_chat_deployment(monkeypatch, capsys):
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ENDPOINT)
     calls = []
-    out = foundry.ask(_chat_client(calls=calls), settings(), [{"type": "text", "text": "Q"}])
+    out, limit = foundry.ask(_chat_client(calls=calls), settings(), [{"type": "text", "text": "Q"}])
     assert out == "The answer."
+    assert limit is None
     assert calls[0]["model"] == "gpt-6.1-terra"
     assert calls[0]["messages"][0]["role"] == "user"
     assert "tokens: 1 in + 2 out = 3 total" in capsys.readouterr().err
@@ -442,7 +445,8 @@ def test_ask_wraps_api_errors(monkeypatch):
     def create(**kw):
         raise _status_error(403)
 
-    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    completions = SimpleNamespace(with_raw_response=SimpleNamespace(create=create))
+    client = SimpleNamespace(chat=SimpleNamespace(completions=completions))
     with pytest.raises(TubetellError, match="Azure OpenAI error 403"):
         foundry.ask(client, settings(), [])
 
@@ -786,3 +790,99 @@ def test_screen_mode_needs_video(pipeline, monkeypatch):
         foundry.answer(
             pipeline.src, mode="screen", prompt=None, model=None, clip=None, fps=None, description=None
         )
+
+
+# --- the deployment's rate limit ------------------------------------------------------
+
+
+def test_estimate_counts_text_and_frames():
+    from tubetell.foundry import FRAME_TOKENS, estimate_request
+
+    assert estimate_request("x" * 4000, 0) == 1000
+    assert estimate_request("", 3) == 3 * FRAME_TOKENS
+
+
+def test_token_limit_reads_the_header():
+    from tubetell.foundry import token_limit
+
+    assert token_limit({"x-ratelimit-limit-tokens": "50000"}) == 50_000
+    assert token_limit({}) is None
+    assert token_limit({"x-ratelimit-limit-tokens": "lots"}) is None
+
+
+def test_batches_split_frames_to_fit_the_limit(tmp_path):
+    from tubetell.foundry import FRAME_TOKENS, batches
+
+    frames = [Frame(float(i), tmp_path / f"{i}.jpg") for i in range(10)]
+    # Room for 4 frames beside 1,000 tokens of text at this limit.
+    limit = -(-(1_000 + 4 * FRAME_TOKENS) * 10 // 9)
+    out = batches(frames, text_tokens=1_000, limit=limit)
+    assert [len(b) for b in out] == [4, 4, 2]
+    assert out[0][0].time == 0.0 and out[2][-1].time == 9.0
+    assert batches(frames, text_tokens=1_000, limit=None) == [frames]
+    assert batches([], text_tokens=1_000, limit=limit) == [[]]
+
+
+def test_batches_fail_clearly_when_the_text_alone_does_not_fit():
+    from tubetell.foundry import batches
+
+    with pytest.raises(TubetellError, match=r"about 60,000 tokens.*50,000 tokens per minute.*capacity"):
+        batches([], text_tokens=60_000, limit=50_000)
+
+
+def _raw_chat_client(text="The answer.", limit="50000", calls=None, fail_with=None):
+    def create(**kw):
+        if calls is not None:
+            calls.append(kw)
+        if fail_with is not None:
+            raise fail_with
+        parsed = SimpleNamespace(
+            choices=[SimpleNamespace(finish_reason="stop", message=SimpleNamespace(content=text))],
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        )
+        return SimpleNamespace(headers={"x-ratelimit-limit-tokens": limit}, parse=lambda: parsed)
+
+    completions = SimpleNamespace(with_raw_response=SimpleNamespace(create=create))
+    return SimpleNamespace(chat=SimpleNamespace(completions=completions))
+
+
+def test_ask_returns_the_text_and_the_limit(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ENDPOINT)
+    text, limit = foundry.ask(_raw_chat_client(), settings(), [{"type": "text", "text": "Q"}])
+    assert text == "The answer."
+    assert limit == 50_000
+
+
+def test_429_after_retries_names_the_request_and_the_limit(monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ENDPOINT)
+    request = httpx.Request("POST", ENDPOINT + "/openai/v1/chat/completions")
+    response = httpx.Response(
+        429, request=request, headers={"x-ratelimit-limit-tokens": "50000"},
+        json={"error": {"message": "exceeded token rate limit"}},
+    )
+    err = openai.RateLimitError("exceeded token rate limit", response=response, body=None)
+    client = _raw_chat_client(fail_with=err)
+    with pytest.raises(TubetellError, match=r"429.*about 2,000 tokens.*50,000 tokens per minute"):
+        foundry.ask(client, settings(), [{"type": "text", "text": "x" * 8000}])
+
+
+def test_answer_probes_the_limit_and_sends_frames_in_batches_then_merges(pipeline, monkeypatch, tmp_path):
+    calls = pipeline.calls
+    # 8,000 * 0.9 = 7,200 tokens of room, the text is a few hundred: two frames per request.
+    monkeypatch.setattr(foundry, "FRAME_TOKENS", 3_000)
+    monkeypatch.setattr(foundry, "make_client", lambda cfg: _raw_chat_client(limit="8000", calls=calls))
+    monkeypatch.setattr(
+        foundry, "sample_frames",
+        lambda path, span, workdir, *, fps: [Frame(float(i), tmp_path / "f.jpg") for i in range(5)],
+    )
+    monkeypatch.setattr(foundry, "PROBE_ABOVE", 0)
+    out = foundry.answer(
+        pipeline.src, mode="summary", prompt=None, model=None, clip=None, fps=None, description=None,
+        raw_frames=True,
+    )
+    assert out == "The answer."
+    # probe, three batches (2 + 2 + 1 frames), one merge
+    assert len(calls) == 5
+    images = [sum(1 for c in call["messages"][0]["content"] if c["type"] == "image_url") for call in calls]
+    assert images == [0, 2, 2, 1, 0]
+    assert "[span 0:00-0:01]" in calls[4]["messages"][0]["content"][0]["text"]

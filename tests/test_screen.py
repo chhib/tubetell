@@ -104,7 +104,9 @@ def test_observe_sends_batches_and_caches(monkeypatch, tmp_path, capsys):
         )
         return parsed
 
-    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(with_raw_response=SimpleNamespace(
+        create=lambda **kw: SimpleNamespace(headers={}, parse=lambda: create(**kw))
+    ))))
     obs = screen.observe(client, settings(), src, (0.0, 30.0), frames, fps=None)
     assert len(calls) == 2
     assert [o.time for o in obs] == [0.0, 10.0, 20.0]
