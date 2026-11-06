@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pytest
 from google.genai import errors as genai_errors
@@ -464,3 +465,17 @@ def test_help_lists_the_provider_choice(monkeypatch, capsys):
     with pytest.raises(SystemExit):
         run_main(monkeypatch, ["--help"])
     assert "--provider {gemini,azure}" in capsys.readouterr().out
+
+
+def test_azure_transcript_file_is_passed_to_the_pipeline(azure_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    seen = {}
+    monkeypatch.setattr(cli.foundry, "answer", lambda path, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["rec.mov", "--provider", "azure", "--transcript", "fixed.md"])
+    assert seen["transcript"] == Path("fixed.md")
+
+
+def test_transcript_flag_is_azure_only(azure_env, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    with pytest.raises(SystemExit, match="--transcript .*--provider azure"):
+        run_main(monkeypatch, ["rec.mov", "--transcript", "fixed.md"])

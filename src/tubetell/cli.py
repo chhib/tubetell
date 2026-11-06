@@ -27,8 +27,9 @@ timestamp rule: mm:ss inside the first hour, h:mm:ss past it, and — when the
 runtime can be established — nothing cited beyond the end of the video.
 
 --provider azure runs the same modes on Azure AI Foundry instead, so the media
-stays in your Azure tenant: the audio is transcribed with speakers, stills are
-sampled with ffmpeg, and a chat deployment answers from both (see
+stays in your Azure tenant: the audio is transcribed with speakers (once per
+file; the transcript is cached under ~/.cache/tubetell/), stills are sampled
+with ffmpeg, and a chat deployment answers from both (see
 docs/providers/azure.md). YouTube and other pages are downloaded first.
 """
 
@@ -104,6 +105,7 @@ def analyze_azure(
     fps: float | None = None,
     clip: str | None = None,
     processing: str = "auto",
+    transcript: str | None = None,
 ) -> str:
     """The Azure pipeline: everything becomes a local file first."""
     if mode == "comments":
@@ -137,6 +139,7 @@ def analyze_azure(
         clip=span,
         fps=fps,
         description=description,
+        transcript=Path(transcript).expanduser() if transcript else None,
     )
 
 
@@ -305,6 +308,11 @@ def main() -> None:
     )
     p.add_argument("--clip", help="analyze only this span, e.g. 1:30-2:45")
     p.add_argument(
+        "--transcript",
+        help="--provider azure: use this finished (or hand-corrected) transcript — "
+        "tubetell's text format or its cached JSON — instead of transcribing",
+    )
+    p.add_argument(
         "--width",
         type=int,
         default=1280,
@@ -332,8 +340,11 @@ def main() -> None:
                 fps=args.fps,
                 clip=args.clip,
                 processing=args.processing,
+                transcript=args.transcript,
             )
         else:
+            if args.transcript:
+                raise TubetellError("--transcript applies to --provider azure only.")
             result = run_gemini(args, loaded)
     except TubetellError as exc:
         sys.exit(str(exc))
