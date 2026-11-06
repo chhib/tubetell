@@ -25,6 +25,11 @@ Modes (--mode), each a tuned prompt preset:
 --prompt overrides the mode preset entirely. Either way the request carries a
 timestamp rule: mm:ss inside the first hour, h:mm:ss past it, and — when the
 runtime can be established — nothing cited beyond the end of the video.
+
+--provider azure runs the same modes on Azure AI Foundry instead, so the media
+stays in your Azure tenant: the audio is transcribed with speakers, stills are
+sampled with ffmpeg, and a chat deployment answers from both (see
+docs/providers/azure.md). YouTube and other pages are downloaded first.
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ from .config import (
 )
 from .budget import plan
 from .download import fetch, is_downloadable
+from . import foundry
 from .gemini import (
     LIST_MODES,
     MODE_PROMPTS,
@@ -60,6 +66,7 @@ from .gemini import (
 )
 from .media import (
     format_offset,
+    youtube_url,
     looks_like_path,
     CHUNK_RUNG,
     TooBigError,
@@ -82,6 +89,55 @@ def drop_preamble(text: str) -> str:
     lines = text.strip().splitlines()
     first = next((i for i, line in enumerate(lines) if line.lstrip().startswith("[")), 0)
     return "\n".join(lines[first:]).strip()
+
+
+DEFAULT_MODEL = "gemini-3.8-flash"
+PROVIDERS = ("gemini", "azure")
+
+
+def analyze_azure(
+    source: str,
+    *,
+    mode: str,
+    prompt: str | None,
+    model: str | None,
+    fps: float | None = None,
+    clip: str | None = None,
+    processing: str = "auto",
+) -> str:
+    """The Azure pipeline: everything becomes a local file first."""
+    if mode == "comments":
+        raise TubetellError(
+            "--mode comments reads a YouTube comment section through the YouTube "
+            "Data API and Gemini; it is not available with --provider azure."
+        )
+    if processing != "auto":
+        raise TubetellError(
+            "--processing chooses between Gemini's agentic and static paths; it "
+            "does not apply to --provider azure."
+        )
+    if source.startswith("gs://"):
+        raise TubetellError(
+            "--provider azure cannot read a Cloud Storage (gs://) object; download "
+            "it and pass the file instead."
+        )
+    foundry.settings(model)  # fail on missing config before any download
+    span = parse_clip(clip) if clip else None
+    description = None
+    if not looks_like_path(source):
+        # A YouTube URL or id, or any other page: yt-dlp fetches it once.
+        url = source if source.startswith(("http://", "https://")) else youtube_url(source)
+        path, description = fetch(url)
+        source = str(path)
+    return foundry.answer(
+        Path(source).expanduser(),
+        mode=mode,
+        prompt=prompt,
+        model=model,
+        clip=span,
+        fps=fps,
+        description=description,
+    )
 
 
 def analyze(
@@ -220,7 +276,17 @@ def main() -> None:
     p.add_argument("--mode", default="summary", choices=list(MODE_PROMPTS) + ["comments"])
     p.add_argument("--prompt", help="override the mode preset with a custom prompt")
     p.add_argument(
-        "--model", default="gemini-3.8-flash", help="Gemini model id (default: gemini-3.8-flash)"
+        "--provider",
+        default="gemini",
+        choices=PROVIDERS,
+        help="gemini (default) or azure — Azure AI Foundry: transcript with speakers "
+        "+ sampled frames, answered by a chat deployment; needs AZURE_OPENAI_ENDPOINT",
+    )
+    p.add_argument(
+        "--model",
+        help=f"Gemini model id (default: {DEFAULT_MODEL}); with --provider azure, the "
+        "chat deployment (default: $AZURE_OPENAI_CHAT_DEPLOYMENT or "
+        f"{foundry.CHAT_DEPLOYMENT})",
     )
     p.add_argument(
         "--processing",
@@ -257,21 +323,18 @@ def main() -> None:
     loaded = load_env()
 
     try:
-        check_credentials_file()
-        if not (load_gemini_api_key() or os.environ.get("GOOGLE_CLOUD_PROJECT")):
-            raise TubetellError(missing_credentials_message(loaded))
-        result = analyze(
-            args.source,
-            mode=args.mode,
-            prompt=args.prompt,
-            model=args.model,
-            max_comments=args.max_comments,
-            fps=args.fps,
-            clip=args.clip,
-            width=args.width,
-            transcode=not args.no_transcode,
-            processing=args.processing,
-        )
+        if args.provider == "azure":
+            result = analyze_azure(
+                args.source,
+                mode=args.mode,
+                prompt=args.prompt,
+                model=args.model,
+                fps=args.fps,
+                clip=args.clip,
+                processing=args.processing,
+            )
+        else:
+            result = run_gemini(args, loaded)
     except TubetellError as exc:
         sys.exit(str(exc))
     except genai_errors.APIError as exc:  # 4xx: bad project, missing API, no access
@@ -284,6 +347,24 @@ def main() -> None:
         print(f"Wrote {args.mode} output -> {out}", file=sys.stderr)
     else:
         print(result)
+
+
+def run_gemini(args: argparse.Namespace, loaded: list[Path]) -> str:
+    check_credentials_file()
+    if not (load_gemini_api_key() or os.environ.get("GOOGLE_CLOUD_PROJECT")):
+        raise TubetellError(missing_credentials_message(loaded))
+    return analyze(
+        args.source,
+        mode=args.mode,
+        prompt=args.prompt,
+        model=args.model or DEFAULT_MODEL,
+        max_comments=args.max_comments,
+        fps=args.fps,
+        clip=args.clip,
+        width=args.width,
+        transcode=not args.no_transcode,
+        processing=args.processing,
+    )
 
 
 if __name__ == "__main__":

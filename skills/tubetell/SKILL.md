@@ -38,6 +38,9 @@ tubetell "<url>" --clip 12:00-18:30
 
 # 9. X / Twitter (or Vimeo, ...) — pass the post URL; tubetell downloads it with yt-dlp
 tubetell "https://x.com/<user>/status/<id>" --processing static --mode transcript --out transcript.md
+
+# 10. Company meetings that must stay in the Azure tenant (Azure AI Foundry, az login)
+tubetell meeting.mp4 --provider azure --mode transcript --out transcript.md
 ```
 
 ## Agent Best Practices
@@ -48,6 +51,7 @@ tubetell "https://x.com/<user>/status/<id>" --processing static --mode transcrip
 - **Credentials:**
   - `GEMINI_API_KEY`: Enables fast, low-token agentic processing on the Gemini Developer API.
   - `GOOGLE_CLOUD_PROJECT`: Enables Vertex AI static processing (used for `gs://` URIs, `--clip`, `--fps`, or `--processing static`).
+  - `AZURE_OPENAI_ENDPOINT` + `az login`: `--provider azure` (transcript with speakers + sampled frames on Azure AI Foundry; no comments mode). Use it when the user wants the recording kept in the company tenant. Speaker labels like `Speaker 2-A` are per 20-minute part, not one person across parts.
 - **Timestamps:** Every timestamp citation is bounded by the real video duration (`[mm:ss]` under 1 hour, `[h:mm:ss]` over 1 hour).
 - **Speaker names are the weak spot — always reconcile them.** The model is told never to guess a name and to fall back on `Host`/`Guest`/`Speaker 1`, and the video description is fed in as the roster, but a name in the output is still the one claim that cannot be checked against the media. Before attributing a quote to a person, check the participant list in the video description (`youtube_scraper.py video <id> --raw`, field `snippet.description`). Two runs over the same video can invent two different names, so a transcript and a claims list that disagree about who spoke is the tell.
 - **X posts and other non-YouTube pages:** pass the URL as-is; do not download it yourself. tubetell fetches it once with yt-dlp (≤720p, cached by URL) and uses the post text as the speaker roster. An hour-long file that won't fit one static request is split into ~12-min spans automatically, sent one at a time (parallel runs exhaust the 429 quota), with timestamps put back on the full video's clock — no manual `--clip` loop needed.
