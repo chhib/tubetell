@@ -18,7 +18,8 @@ No Azure model reads video, so tubetell takes the media apart locally with
 ffmpeg and sends the pieces:
 
 1. **Audio → transcript with speakers.** The audio track is cut to mono 16 kHz
-   32 kbps MP3 in 20-minute chunks that overlap by 10 s. Each chunk goes to the
+   32 kbps MP3 in 20-minute chunks that overlap by 10 s (5-minute chunks, sent
+   several at a time, with `--speaker`; see below). Each chunk goes to the
    transcription deployment with `response_format="diarized_json"` and
    `chunking_strategy="auto"`. Segment times are moved onto the source's clock
    and the chunks are merged; a segment in an overlap is kept once, by the
@@ -114,6 +115,22 @@ known speakers is cached under its own key (the names), next to the plain one.
 A reference should be one person talking, 2 to 10 s, from the same kind of
 recording (a meeting voice sounds different from a phone voice).
 
+**Short chunks, several at a time.** Without known speakers the chunks are 20
+minutes long, one after the other, because every chunk boundary is a new set
+of labels to reconcile. With `--speaker` the names are stable across chunks,
+so the audio is cut in 5-minute chunks (same 10 s overlap and merge) and sent
+several at a time: the first chunk alone, then the rest with as many requests
+at once as the deployment's requests-per-minute header allows
+(`x-ratelimit-limit-requests` / 2,000, at most 8; 2 when the header is
+missing). A 5-minute chunk takes about 100 s, so a 35-minute recording
+transcribes in two to three minutes instead of twenty.
+
+```
+transcribing 1/7 00:00-05:00 (1.1 MB)...
+  6 more chunks, 8 at a time
+transcribing 2/7 04:50-09:50 (1.1 MB)...
+```
+
 ## Deployments
 
 | Setting | Default | Used for |
@@ -163,7 +180,7 @@ Neither the token nor the key is ever printed.
 | Limit | Value | How tubetell handles it |
 |---|---|---|
 | Transcription file size | 25 MB per request | 20-minute chunks are ~4.8 MB |
-| Transcription duration | not documented; reported as ~1400 s for the diarize model | 20-minute (1200 s) chunks |
+| Transcription duration | not documented; reported as ~1400 s for the diarize model | 20-minute (1200 s) chunks; 5-minute with `--speaker` |
 | Speaker labels | consistent within one request only | per-chunk labels, reconciled in step 3 |
 | Frames per chat request | 50 (tubetell's cap; ~1,000 input tokens each at high detail) | thinned evenly |
 | Model lifetime | OpenAI lists `gpt-4o-transcribe-diarize` as deprecated, shutting down 2027-02-26 (Azure retirement dates may differ) | point `AZURE_OPENAI_TRANSCRIBE_DEPLOYMENT` at its successor |

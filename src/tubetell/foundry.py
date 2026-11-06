@@ -56,6 +56,14 @@ SCOPE = "https://cognitiveservices.azure.com/.default"
 # boundary whole in one of the two chunks.
 CHUNK_SECONDS = 1200
 CHUNK_OVERLAP = 10
+# With known speakers the labels need no reconciling across chunks, so the
+# chunks can be short and run at the same time: 5 minutes takes ~100 s.
+SHORT_CHUNK_SECONDS = 300
+# How many transcription requests to run at once, from the deployment's
+# requests-per-minute header; 2 when it says nothing.
+PARALLEL_PER_RPM = 2000
+MAX_PARALLEL = 8
+DEFAULT_PARALLEL = 2
 AUDIO_ARGS = ("-vn", "-ac", "1", "-ar", "16000", "-c:a", "libmp3lame", "-b:a", "32k")
 
 # Frames: one every FRAME_INTERVAL seconds, plus a scene change when the picture
@@ -229,6 +237,21 @@ def plan_chunks(
         a = b - overlap
 
 
+def chunk_length(*, named: bool) -> int:
+    """Short chunks when the speakers are named, long ones when their labels
+    would have to be reconciled across chunks."""
+    return SHORT_CHUNK_SECONDS if named else CHUNK_SECONDS
+
+
+def parallelism(headers) -> int:
+    """How many transcription requests to run at once for this deployment."""
+    try:
+        rpm = int(headers.get("x-ratelimit-limit-requests"))
+    except (TypeError, ValueError):
+        return DEFAULT_PARALLEL
+    return max(1, min(MAX_PARALLEL, rpm // PARALLEL_PER_RPM))
+
+
 def speaker_label(raw: str | None, part: int | None, known: tuple[str, ...] = ()) -> str:
     """An honest label for a diarizer label.
 
@@ -386,18 +409,24 @@ def transcribe(
     `speakers` are known voices (tubetell.speakers.Speaker): their names and
     reference clips go with every request, and come back as the labels.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     from .speakers import references
 
-    chunks = plan_chunks(*span)
-    several = len(chunks) > 1
     known = tuple(s.name for s in speakers)
+    chunks = plan_chunks(*span, length=chunk_length(named=bool(known)))
+    several = len(chunks) > 1
     extra: dict = {}
     if speakers:
         extra = dict(known_speaker_names=list(known), known_speaker_references=references(speakers))
-    per_chunk = []
+    files = []
     for i, chunk in enumerate(chunks, start=1):
         dest = workdir / f"audio-{i:03d}.mp3"
         _run(audio_command(src, dest, chunk), f"extracting audio from {src.name}")
+        files.append(dest)
+
+    def request(i: int):
+        chunk, dest = chunks[i - 1], files[i - 1]
         label = f" {i}/{len(chunks)}" if several else ""
         print(
             f"transcribing{label} {stamp(chunk[0])}-{stamp(chunk[1])} "
@@ -406,7 +435,7 @@ def transcribe(
         )
         try:
             with dest.open("rb") as handle:
-                resp = client.audio.transcriptions.create(
+                raw = client.audio.transcriptions.with_raw_response.create(
                     model=cfg.transcribe_deployment,
                     file=handle,
                     response_format="diarized_json",
@@ -417,6 +446,19 @@ def transcribe(
             raise
         except Exception as exc:
             raise _api_error(exc) from exc
+        return raw
+
+    # The first request alone: its headers say how many may run at once.
+    responses = [request(1)]
+    if several:
+        at_once = parallelism(responses[0].headers)
+        if at_once > 1 and len(chunks) > 2:
+            print(f"  {len(chunks) - 1} more chunks, {at_once} at a time", file=sys.stderr)
+        with ThreadPoolExecutor(max_workers=at_once) as pool:
+            responses.extend(pool.map(request, range(2, len(chunks) + 1)))
+    per_chunk = []
+    for i, (chunk, raw) in enumerate(zip(chunks, responses), start=1):
+        resp = raw.parse()
         usage.add(_field(resp, "usage"))
         per_chunk.append(
             segments_from(resp, offset=chunk[0], part=i if several else None, known=known)

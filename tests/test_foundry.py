@@ -251,6 +251,15 @@ def test_transcription_usage_line_counts_seconds_and_requests():
     assert tokens.line() == "transcribed: 1,500 tokens in 1 request"
 
 
+def _raw(data, headers=None):
+    return SimpleNamespace(headers=headers or {}, parse=lambda: data)
+
+
+def _stt_client(create):
+    transcriptions = SimpleNamespace(with_raw_response=SimpleNamespace(create=create))
+    return SimpleNamespace(audio=SimpleNamespace(transcriptions=transcriptions))
+
+
 def test_transcribe_calls_diarize_per_chunk_and_merges(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ENDPOINT)
     calls = []
@@ -260,10 +269,10 @@ def test_transcribe_calls_diarize_per_chunk_and_merges(monkeypatch, tmp_path, ca
 
     def create(**kw):
         calls.append(kw)
-        return DIARIZED
+        return _raw(DIARIZED)
 
     monkeypatch.setattr(foundry, "_run", fake_run)
-    client = SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create)))
+    client = _stt_client(create)
     usage = TranscriptionUsage()
     segs = foundry.transcribe(client, settings(), Path("in.mov"), (0, 1500), tmp_path, usage)
 
@@ -612,15 +621,15 @@ def test_transcribe_sends_the_references_with_every_chunk(monkeypatch, tmp_path,
         calls.append(kw)
         named = json.loads(json.dumps(DIARIZED))
         named["segments"][0]["speaker"] = "Ada"
-        return named
+        return _raw(named)
 
     monkeypatch.setattr(foundry, "_run", fake_run)
-    client = SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create)))
+    client = _stt_client(create)
     segs = foundry.transcribe(
         client, settings(), Path("in.mov"), (0, 1500), tmp_path, TranscriptionUsage(),
         speakers=[Speaker("Ada", ref)],
     )
-    assert len(calls) == 2
+    assert len(calls) == 6  # 5-minute chunks (10 s overlap) with known speakers
     assert calls[1]["known_speaker_names"] == ["Ada"]
     assert calls[1]["known_speaker_references"] == ["data:audio/mp3;base64,//s="]
     assert segs[0].speaker == "Ada"
@@ -646,3 +655,54 @@ def test_known_speakers_get_their_own_cache_and_a_softer_voice_note(cached_pipel
     text = cached_pipeline.calls[0]["messages"][0]["content"][0]["text"]
     assert "Speaker N-A" in text
     assert "A label that is a name" in text
+
+
+# --- short, parallel chunks with known speakers ---------------------------------------
+
+
+def test_known_speakers_make_the_chunks_short():
+    from tubetell.foundry import SHORT_CHUNK_SECONDS, chunk_length
+
+    assert chunk_length(named=False) == 1200
+    assert chunk_length(named=True) == SHORT_CHUNK_SECONDS == 300
+
+
+def test_parallelism_follows_the_requests_per_minute_header():
+    from tubetell.foundry import parallelism
+
+    assert parallelism({"x-ratelimit-limit-requests": "30000"}) == 8
+    assert parallelism({"x-ratelimit-limit-requests": "5000"}) == 2
+    assert parallelism({"x-ratelimit-limit-requests": "1000"}) == 1
+    assert parallelism({}) == 2
+
+
+def test_transcribe_runs_the_later_chunks_at_the_same_time(monkeypatch, tmp_path, capsys):
+    import threading
+
+    from tubetell.speakers import Speaker
+
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ENDPOINT)
+    ref = tmp_path / "Ada.mp3"
+    ref.write_bytes(b"x")
+    monkeypatch.setattr(foundry, "_run", lambda cmd, what: Path(cmd[-1]).write_bytes(b"mp3"))
+    # Four chunks (0-300, 290-590, 580-880, 870-1000): the first alone, then
+    # three together. The barrier only opens when all three run at once.
+    together = threading.Barrier(3, timeout=5)
+    seen = []
+
+    def create(**kw):
+        seen.append(kw["file"].name)
+        if len(seen) > 1:
+            together.wait()
+        return _raw(DIARIZED, {"x-ratelimit-limit-requests": "30000"})
+
+    usage = TranscriptionUsage()
+    segs = foundry.transcribe(
+        _stt_client(create), settings(), Path("in.mov"), (0, 1000), tmp_path, usage,
+        speakers=[Speaker("Ada", ref)],
+    )
+    assert len(seen) == 4
+    assert usage.requests == 4
+    assert [s.speaker for s in segs][:2] == ["Speaker 1-A", "Speaker 1-B"]
+    assert segs[-1].start == pytest.approx(870 + 12.1)
+    assert "8 at a time" in capsys.readouterr().err
