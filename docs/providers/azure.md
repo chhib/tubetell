@@ -62,9 +62,12 @@ legible in a frame, or listed in the description are used.
 | `AZURE_OPENAI_TRANSCRIBE_DEPLOYMENT` | `gpt-4o-transcribe-diarize` | step 1, speech to text with speakers |
 | `AZURE_OPENAI_CHAT_DEPLOYMENT` | `gpt-6.1-terra` | step 3, the answer (text + image input) |
 
-`--model <deployment>` overrides the chat deployment for one run. tubetell
-talks to the resource's v1 API (`<endpoint>/openai/v1/`), which takes no
-`api-version` parameter.
+`--model <deployment>` overrides the chat deployment for one run. The chat
+step talks to the resource's v1 API (`<endpoint>/openai/v1/`), which takes no
+`api-version` parameter. The transcription step uses the classic deployment
+route (`<endpoint>/openai/deployments/<name>/audio/transcriptions`,
+`api-version=2025-03-01-preview`): on v1 the diarize model answers 404
+DeploymentNotFound.
 
 ## Setup
 

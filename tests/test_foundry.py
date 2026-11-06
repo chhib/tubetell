@@ -105,6 +105,18 @@ def test_base_url_points_at_the_v1_api_once(endpoint):
     assert base_url(endpoint) == ENDPOINT + "/openai/v1/"
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    [ENDPOINT, ENDPOINT + "/", ENDPOINT + "/openai/v1", ENDPOINT + "/openai/v1/"],
+)
+def test_transcription_uses_the_deployment_route(endpoint):
+    from tubetell.foundry import Settings, make_transcribe_client
+
+    client = make_transcribe_client(Settings(endpoint=endpoint, transcribe_deployment="stt", chat_deployment="chat", api_key="k"))
+    assert str(client.base_url) == ENDPOINT + "/openai/"
+    assert client._api_version == "2025-03-01-preview"
+
+
 def test_make_client_uses_entra_by_default(monkeypatch):
     monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ENDPOINT)
     seen = {}

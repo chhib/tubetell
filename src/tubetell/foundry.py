@@ -125,6 +125,36 @@ def make_client(cfg: Settings):
     )
 
 
+# The diarize model answers only on the classic deployment route
+# (/openai/deployments/<name>/audio/transcriptions); /openai/v1/ gives 404
+# DeploymentNotFound for it (seen live 2026-11-06). Chat works on v1.
+TRANSCRIBE_API_VERSION = "2025-03-01-preview"
+
+
+def resource_root(endpoint: str) -> str:
+    """The resource URL without a trailing /openai/v1."""
+    root = endpoint.rstrip("/")
+    return root.removesuffix("/openai/v1").rstrip("/")
+
+
+def make_transcribe_client(cfg: Settings):
+    """A client on the classic deployment route, for step 1 only."""
+    from openai import AzureOpenAI
+
+    auth: dict = {"api_key": cfg.api_key}
+    if not cfg.api_key:
+        from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+        auth = {"azure_ad_token_provider": get_bearer_token_provider(DefaultAzureCredential(), SCOPE)}
+    return AzureOpenAI(
+        azure_endpoint=resource_root(cfg.endpoint),
+        api_version=TRANSCRIBE_API_VERSION,
+        timeout=REQUEST_TIMEOUT,
+        max_retries=4,
+        **auth,
+    )
+
+
 def _api_error(exc: Exception) -> TubetellError:
     """A clean message for an Azure failure; never includes the credential."""
     from openai import APIConnectionError, APIStatusError
@@ -591,7 +621,7 @@ def answer(
         workdir = Path(tmp)
         segments: list[Segment] = []
         if info["audio"]:
-            segments = transcribe(client, cfg, path, span, workdir, usage)
+            segments = transcribe(make_transcribe_client(cfg), cfg, path, span, workdir, usage)
             print(usage.line(), file=sys.stderr)
         elif transcript_only:
             raise TubetellError(f"{path.name} has no audio track to transcribe.")
