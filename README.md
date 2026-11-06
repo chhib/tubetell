@@ -38,6 +38,7 @@ tubetell meeting.mp4 --provider azure --glossary terms.txt                      
 | `transcript` | full timestamped transcript, one line per segment, speakers attributed |
 | `claims` | every checkable factual claim with timestamp and speaker |
 | `sentiment` | how tone/sentiment shifts across the runtime, each shift timestamped |
+| `tickets` | the work items the discussion asks for: timestamps, exact figures and identifiers, an owner only when named; ways of working listed separately |
 | `comments` | audience sentiment from top comments (reads comments, not the video) |
 | `screen` | what is on each sampled frame: shown, legible, wrong (`--provider azure` only) |
 
@@ -49,7 +50,9 @@ tubetell meeting.mp4 --provider azure --glossary terms.txt                      
 Every answer carries a timestamp rule and a speaker rule, so the model neither
 writes impossible timestamps nor invents names: see
 [docs/rules.md](docs/rules.md). Names are still the weakest part of any answer;
-check them before you quote anyone.
+check them before you quote anyone. For a local recording, `--roster "Ada (host),
+Bob (guest)"` (or a file) gives the answer the names it may use, as a YouTube
+description does.
 
 ## Install
 

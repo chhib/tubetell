@@ -222,3 +222,22 @@ def test_generate_does_not_retry_other_client_errors(monkeypatch):
 
     with pytest.raises(genai_errors.ClientError):
         generate(SimpleNamespace(models=Forbidden()), model="m", contents="c")
+
+
+def test_tickets_mode_demands_evidence_and_separates_ways_of_working():
+    from tubetell.gemini import MODE_PROMPTS
+
+    preset = MODE_PROMPTS["tickets"]
+    assert "timestamp" in preset
+    assert "figures" in preset and "identifiers" in preset
+    assert "unassigned" in preset
+    assert "ways of working" in preset.lower()
+    assert video_body(preset, 90).startswith(preset)
+
+
+def test_roster_rule_covers_a_roster_given_by_the_caller():
+    from tubetell.gemini import roster_rule
+
+    text = roster_rule("Ada Lovelace (host), Bob (guest)")
+    assert "Ada Lovelace (host), Bob (guest)" in text
+    assert "description" in text and "roster" in text
