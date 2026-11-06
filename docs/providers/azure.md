@@ -65,6 +65,36 @@ request; a span the cache does not cover is transcribed and cached on its own.
 A different transcription deployment gets its own file. Delete the file to
 transcribe again.
 
+### Glossary: `--glossary`
+
+The transcription model mishears names and products, and the diarize model
+rejects the `prompt` field a glossary would normally go in (HTTP 400, "Prompt
+is not supported for diarization models"). So the glossary is applied after
+transcription: one text-only chat request gets the numbered transcript and the
+terms, and answers with the replacements it would make, as JSON. tubetell
+applies them itself, and only a replacement whose target is a listed term and
+whose source is really in that line; every change is printed:
+
+```
+glossary: checking 71 lines against 10 terms...
+tokens: 2,024 in + 1,068 thinking + 92 out = 3,184 total
+glossary: 4 changes
+  [00:47] "den deluxe" -> "Benelux"
+  [01:37] "smanska laget" -> "semantiska lagret"
+  [01:57] "VDBT" -> "dbt"
+  [02:16] "semanska laget" -> "semantiska lagret"
+```
+
+```bash
+tubetell meeting.mp4 --provider azure --glossary terms.txt
+```
+
+`terms.txt` holds one term per line; `#` starts a comment. Without the flag,
+`~/.config/tubetell/glossary.txt` is used when it exists (`$XDG_CONFIG_HOME`
+replaces `~/.config`). The corrected transcript is what the cache holds, under
+its own key (a hash of the terms), so the plain transcript and the corrected
+one do not mix. The request costs about 30,000 tokens for a 35-minute meeting.
+
 **`--transcript <file>`** skips transcription and uses a finished transcript
 instead: the cached JSON, or tubetell's own text format (`[mm:ss] Speaker:
 text`, one line per segment, as `--mode transcript` writes it). Correct the

@@ -706,3 +706,25 @@ def test_transcribe_runs_the_later_chunks_at_the_same_time(monkeypatch, tmp_path
     assert [s.speaker for s in segs][:2] == ["Speaker 1-A", "Speaker 1-B"]
     assert segs[-1].start == pytest.approx(870 + 12.1)
     assert "8 at a time" in capsys.readouterr().err
+
+
+# --- glossary -------------------------------------------------------------------------
+
+
+def test_glossary_corrects_before_caching_and_keys_the_cache(cached_pipeline, monkeypatch, tmp_path):
+    from tubetell import glossary
+
+    corrected = []
+    monkeypatch.setattr(
+        glossary, "correct",
+        lambda client, cfg, segments, terms: corrected.append(terms)
+        or [Segment(s.start, s.end, s.speaker, s.text.replace("joining", "Kiana")) for s in segments],
+    )
+    out = _run(cached_pipeline, glossary_terms=["Kiana"])
+    assert out.startswith("[00:00] Speaker A: Thanks for Kiana.")
+    assert corrected == [["Kiana"]]
+    # The corrected transcript is what the cache holds; the plain key is separate.
+    assert _run(cached_pipeline, glossary_terms=["Kiana"]) == out
+    assert corrected == [["Kiana"]]
+    assert _run(cached_pipeline).startswith("[00:00] Speaker A: Thanks for joining.")
+    assert cached_pipeline.transcribed == [(0.0, 300.0), (0.0, 300.0)]
