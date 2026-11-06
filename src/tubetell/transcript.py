@@ -77,7 +77,7 @@ class Transcript:
     span: tuple[float, float]
     deployment: str | None
     segments: list[Segment]
-    # What else shaped the transcript (known speaker names); part of the key.
+    # What else shaped the transcript (known speaker names, a glossary); part of the key.
     tag: str = ""
 
     def covers(self, span: tuple[float, float]) -> bool:

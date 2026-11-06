@@ -494,3 +494,32 @@ def test_speaker_flag_is_azure_only(azure_env, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     with pytest.raises(SystemExit, match="--speaker .*--provider azure"):
         run_main(monkeypatch, ["rec.mov", "--speaker", "Ada"])
+
+
+def test_azure_glossary_flag_loads_the_terms(azure_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    g = tmp_path / "g.txt"
+    g.write_text("Kiana\nOneStream\n")
+    seen = {}
+    monkeypatch.setattr(cli.foundry, "answer", lambda path, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["rec.mov", "--provider", "azure", "--glossary", str(g)])
+    assert seen["glossary_terms"] == ["Kiana", "OneStream"]
+
+
+def test_azure_default_glossary_is_used_when_it_exists(azure_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    seen = {}
+    monkeypatch.setattr(cli.foundry, "answer", lambda path, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["rec.mov", "--provider", "azure"])
+    assert seen["glossary_terms"] == []
+    d = tmp_path / "xdg" / "tubetell"
+    d.mkdir(parents=True)
+    (d / "glossary.txt").write_text("Omni\n")
+    run_main(monkeypatch, ["rec.mov", "--provider", "azure"])
+    assert seen["glossary_terms"] == ["Omni"]
+
+
+def test_glossary_flag_is_azure_only(azure_env, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    with pytest.raises(SystemExit, match="--glossary .*--provider azure"):
+        run_main(monkeypatch, ["rec.mov", "--glossary", "g.txt"])

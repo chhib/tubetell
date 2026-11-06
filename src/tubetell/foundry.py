@@ -477,12 +477,21 @@ def cached_transcript(
         if not path.is_file():
             continue
         cached = Transcript.load(path)
-        if not (cached.deployment, cached.tag) == (cfg.transcribe_deployment, tag) or not cached.covers(span):
+        if (cached.deployment, cached.tag) != (cfg.transcribe_deployment, tag) or not cached.covers(span):
             continue
         segments = slice_segments(cached.segments, span)
         print(f"transcript: cached ({path}, {len(segments)} lines)", file=sys.stderr)
         return segments
     return None
+
+
+def transcript_tag(speakers: list = (), glossary_terms: list[str] = ()) -> str:
+    """The cache tag of a transcript made with these known speakers and this
+    glossary: each part that is set, joined by "-"."""
+    from .glossary import glossary_tag
+    from .speakers import cache_tag
+
+    return "-".join(t for t in (cache_tag(list(speakers)), glossary_tag(list(glossary_terms))) if t)
 
 
 def transcribe_and_cache(
@@ -492,13 +501,19 @@ def transcribe_and_cache(
     workdir: Path,
     usage: TranscriptionUsage,
     speakers: list = (),
+    *,
+    client=None,
+    glossary_terms: list[str] = (),
 ) -> list[Segment]:
-    from .speakers import cache_tag
+    from . import glossary
 
     segments = transcribe(make_transcribe_client(cfg), cfg, src, span, workdir, usage, speakers)
     print(usage.line(), file=sys.stderr)
-    path = cache_path(src, span, cfg.transcribe_deployment, tag=cache_tag(speakers))
-    Transcript(src.name, span, cfg.transcribe_deployment, segments, tag=cache_tag(speakers)).save(path)
+    if glossary_terms:
+        segments = glossary.correct(client, cfg, segments, list(glossary_terms))
+    tag = transcript_tag(speakers, glossary_terms)
+    path = cache_path(src, span, cfg.transcribe_deployment, tag=tag)
+    Transcript(src.name, span, cfg.transcribe_deployment, segments, tag=tag).save(path)
     print(f"transcript: saved to {path}", file=sys.stderr)
     return segments
 
@@ -711,12 +726,14 @@ def answer(
     description: str | None,
     transcript: Path | None = None,
     speakers: list = (),
+    glossary_terms: list[str] = (),
 ) -> str:
     """Run the Azure pipeline on one local file and return the answer.
 
     `speakers` are known voices (tubetell.speakers.Speaker) for step 1.
+    `glossary_terms` are restored in a fresh transcript by one chat request
+    before it is cached (tubetell.glossary).
     """
-    from .speakers import cache_tag
 
     cfg = settings(model)
     if not path.exists():
@@ -745,8 +762,8 @@ def answer(
             segments = slice_segments(load_file(transcript).segments, span)
             print(f"transcript: {transcript.name} ({len(segments)} lines)", file=sys.stderr)
         elif info["audio"]:
-            segments = cached_transcript(cfg, path, span, cache_tag(speakers)) or transcribe_and_cache(
-                cfg, path, span, workdir, usage, speakers
+            segments = cached_transcript(cfg, path, span, transcript_tag(speakers, glossary_terms)) or transcribe_and_cache(
+                cfg, path, span, workdir, usage, speakers, client=client, glossary_terms=list(glossary_terms)
             )
         elif transcript_only:
             raise TubetellError(f"{path.name} has no audio track to transcribe.")

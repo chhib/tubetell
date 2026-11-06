@@ -108,6 +108,7 @@ def analyze_azure(
     processing: str = "auto",
     transcript: str | None = None,
     speakers: list[str] | None = None,
+    glossary: str | None = None,
 ) -> str:
     """The Azure pipeline: everything becomes a local file first."""
     if mode == "comments":
@@ -126,6 +127,7 @@ def analyze_azure(
             "it and pass the file instead."
         )
     foundry.settings(model)  # fail on missing config before any download
+    terms = glossary_terms(glossary)
     span = parse_clip(clip) if clip else None
     description = None
     if not looks_like_path(source):
@@ -144,7 +146,18 @@ def analyze_azure(
         description=description,
         transcript=Path(transcript).expanduser() if transcript else None,
         speakers=resolve_speakers(speakers or [], path),
+        glossary_terms=terms,
     )
+
+
+def glossary_terms(flag: str | None) -> list[str]:
+    """The glossary's terms: the --glossary file, else the default file when
+    it exists, else none."""
+    from .glossary import default_path, load_terms
+
+    if flag:
+        return load_terms(Path(flag).expanduser())
+    return load_terms(default_path()) if default_path().is_file() else []
 
 
 def analyze(
@@ -321,6 +334,13 @@ def main() -> None:
         "carries the names",
     )
     p.add_argument(
+        "--glossary",
+        metavar="FILE",
+        help="--provider azure: names and terms the transcript should contain, one "
+        "per line; misheard words are corrected to them after transcription "
+        "(default: ~/.config/tubetell/glossary.txt when it exists)",
+    )
+    p.add_argument(
         "--transcript",
         help="--provider azure: use this finished (or hand-corrected) transcript — "
         "tubetell's text format or its cached JSON — instead of transcribing",
@@ -355,12 +375,15 @@ def main() -> None:
                 processing=args.processing,
                 transcript=args.transcript,
                 speakers=args.speaker,
+                glossary=args.glossary,
             )
         else:
             if args.transcript:
                 raise TubetellError("--transcript applies to --provider azure only.")
             if args.speaker:
                 raise TubetellError("--speaker applies to --provider azure only.")
+            if args.glossary:
+                raise TubetellError("--glossary applies to --provider azure only.")
             result = run_gemini(args, loaded)
     except TubetellError as exc:
         sys.exit(str(exc))
