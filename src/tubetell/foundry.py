@@ -36,7 +36,15 @@ from pathlib import Path
 from . import TubetellError
 from .config import user_config_path
 from .gemini import MODE_PROMPTS, video_body
-from .transcript import Segment, Transcript, cache_path, is_multipart, load_file, slice_segments
+from .transcript import (
+    Segment,
+    Transcript,
+    cache_path,
+    is_multipart,
+    is_named,
+    load_file,
+    slice_segments,
+)
 
 TRANSCRIBE_DEPLOYMENT = "gpt-4o-transcribe-diarize"
 CHAT_DEPLOYMENT = "gpt-6.1-terra"
@@ -221,15 +229,19 @@ def plan_chunks(
         a = b - overlap
 
 
-def speaker_label(raw: str | None, part: int | None) -> str:
-    """An honest generic label for a diarizer label.
+def speaker_label(raw: str | None, part: int | None, known: tuple[str, ...] = ()) -> str:
+    """An honest label for a diarizer label.
 
-    The diarizer names voices `A`, `B`, ... per request, so `A` in one chunk is
+    A known speaker (one sent with a reference clip) comes back under its own
+    name, which is stable across chunks, so it stays as it is. For the rest the
+    diarizer names voices `A`, `B`, ... per request, so `A` in one chunk is
     not necessarily `A` in the next. With several chunks the label carries the
     chunk number (`Speaker 2-A`: voice A of part 2) instead of pretending they
     line up; reconciling voices across parts is left to the answer step.
     """
     raw = (raw or "").strip() or "?"
+    if raw in known:
+        return raw
     if part is None:
         return f"Speaker {raw}"
     return f"Speaker {part}-{raw}"
@@ -241,7 +253,9 @@ def _field(obj, name, default=None):
     return getattr(obj, name, default)
 
 
-def segments_from(response, *, offset: float, part: int | None) -> list[Segment]:
+def segments_from(
+    response, *, offset: float, part: int | None, known: tuple[str, ...] = ()
+) -> list[Segment]:
     """Segments of one diarized_json response, moved onto the source's clock."""
     out = []
     for seg in _field(response, "segments", None) or []:
@@ -252,7 +266,7 @@ def segments_from(response, *, offset: float, part: int | None) -> list[Segment]
             Segment(
                 start=float(_field(seg, "start", 0.0) or 0.0) + offset,
                 end=float(_field(seg, "end", 0.0) or 0.0) + offset,
-                speaker=speaker_label(_field(seg, "speaker"), part),
+                speaker=speaker_label(_field(seg, "speaker"), part, known),
                 text=text,
             )
         )
@@ -359,11 +373,27 @@ class TranscriptionUsage:
 
 
 def transcribe(
-    client, cfg: Settings, src: Path, span: tuple[float, float], workdir: Path, usage: TranscriptionUsage
+    client,
+    cfg: Settings,
+    src: Path,
+    span: tuple[float, float],
+    workdir: Path,
+    usage: TranscriptionUsage,
+    speakers: list = (),
 ) -> list[Segment]:
-    """Step 1: the span's audio, chunked, transcribed with speakers, merged."""
+    """Step 1: the span's audio, chunked, transcribed with speakers, merged.
+
+    `speakers` are known voices (tubetell.speakers.Speaker): their names and
+    reference clips go with every request, and come back as the labels.
+    """
+    from .speakers import references
+
     chunks = plan_chunks(*span)
     several = len(chunks) > 1
+    known = tuple(s.name for s in speakers)
+    extra: dict = {}
+    if speakers:
+        extra = dict(known_speaker_names=list(known), known_speaker_references=references(speakers))
     per_chunk = []
     for i, chunk in enumerate(chunks, start=1):
         dest = workdir / f"audio-{i:03d}.mp3"
@@ -381,26 +411,31 @@ def transcribe(
                     file=handle,
                     response_format="diarized_json",
                     chunking_strategy="auto",
+                    **extra,
                 )
         except TubetellError:
             raise
         except Exception as exc:
             raise _api_error(exc) from exc
         usage.add(_field(resp, "usage"))
-        per_chunk.append(segments_from(resp, offset=chunk[0], part=i if several else None))
+        per_chunk.append(
+            segments_from(resp, offset=chunk[0], part=i if several else None, known=known)
+        )
     return merge_chunks(chunks, per_chunk)
 
 
-def cached_transcript(cfg: Settings, src: Path, span: tuple[float, float]) -> list[Segment] | None:
+def cached_transcript(
+    cfg: Settings, src: Path, span: tuple[float, float], tag: str = ""
+) -> list[Segment] | None:
     """The span's segments from the cache: the file for this exact span, or a
-    slice of any cached span of the same deployment that contains it."""
-    exact = cache_path(src, span, cfg.transcribe_deployment)
-    candidates = [exact] + sorted(exact.parent.glob(f"{cfg.transcribe_deployment}-*.json"))
+    slice of any cached span of the same deployment and tag that contains it."""
+    exact = cache_path(src, span, cfg.transcribe_deployment, tag=tag)
+    candidates = [exact] + sorted(exact.parent.glob("*.json"))
     for path in candidates:
         if not path.is_file():
             continue
         cached = Transcript.load(path)
-        if not cached.covers(span):
+        if not (cached.deployment, cached.tag) == (cfg.transcribe_deployment, tag) or not cached.covers(span):
             continue
         segments = slice_segments(cached.segments, span)
         print(f"transcript: cached ({path}, {len(segments)} lines)", file=sys.stderr)
@@ -409,12 +444,19 @@ def cached_transcript(cfg: Settings, src: Path, span: tuple[float, float]) -> li
 
 
 def transcribe_and_cache(
-    cfg: Settings, src: Path, span: tuple[float, float], workdir: Path, usage: TranscriptionUsage
+    cfg: Settings,
+    src: Path,
+    span: tuple[float, float],
+    workdir: Path,
+    usage: TranscriptionUsage,
+    speakers: list = (),
 ) -> list[Segment]:
-    segments = transcribe(make_transcribe_client(cfg), cfg, src, span, workdir, usage)
+    from .speakers import cache_tag
+
+    segments = transcribe(make_transcribe_client(cfg), cfg, src, span, workdir, usage, speakers)
     print(usage.line(), file=sys.stderr)
-    path = cache_path(src, span, cfg.transcribe_deployment)
-    Transcript(src.name, span, cfg.transcribe_deployment, segments).save(path)
+    path = cache_path(src, span, cfg.transcribe_deployment, tag=cache_tag(speakers))
+    Transcript(src.name, span, cfg.transcribe_deployment, segments, tag=cache_tag(speakers)).save(path)
     print(f"transcript: saved to {path}", file=sys.stderr)
     return segments
 
@@ -523,6 +565,12 @@ VOICE_NOTE = (
     "apart rather than guess."
 )
 
+NAMED_NOTE = (
+    "A label that is a name (not `Speaker ...`) was matched to that person's "
+    "voice by the diarizer from a reference recording; keep those names as they "
+    "are, and reconcile only the generic labels."
+)
+
 
 def answer_text(
     request: str,
@@ -532,11 +580,14 @@ def answer_text(
     description: str | None,
     multipart: bool,
     has_frames: bool,
+    named: bool = False,
 ) -> str:
     """The text half of the chat request: prompt, standing rules, the transcript."""
     parts = [video_body(request, duration, description), PIPELINE_NOTE]
     if multipart:
         parts.append(VOICE_NOTE)
+    if named:
+        parts.append(NAMED_NOTE)
     if transcript:
         parts.append(f"--- TRANSCRIPT ---\n{transcript}\n--- END TRANSCRIPT ---")
     else:
@@ -617,8 +668,14 @@ def answer(
     fps: float | None,
     description: str | None,
     transcript: Path | None = None,
+    speakers: list = (),
 ) -> str:
-    """Run the Azure pipeline on one local file and return the answer."""
+    """Run the Azure pipeline on one local file and return the answer.
+
+    `speakers` are known voices (tubetell.speakers.Speaker) for step 1.
+    """
+    from .speakers import cache_tag
+
     cfg = settings(model)
     if not path.exists():
         raise TubetellError(f"No such file: {path}")
@@ -646,8 +703,8 @@ def answer(
             segments = slice_segments(load_file(transcript).segments, span)
             print(f"transcript: {transcript.name} ({len(segments)} lines)", file=sys.stderr)
         elif info["audio"]:
-            segments = cached_transcript(cfg, path, span) or transcribe_and_cache(
-                cfg, path, span, workdir, usage
+            segments = cached_transcript(cfg, path, span, cache_tag(speakers)) or transcribe_and_cache(
+                cfg, path, span, workdir, usage, speakers
             )
         elif transcript_only:
             raise TubetellError(f"{path.name} has no audio track to transcribe.")
@@ -666,6 +723,7 @@ def answer(
             description=description,
             multipart=is_multipart(segments),
             has_frames=bool(frames),
+            named=is_named(segments),
         )
         print(
             f"asking {cfg.chat_deployment} ({len(segments)} transcript lines, "

@@ -55,6 +55,7 @@ from .config import (
 from .budget import plan
 from .download import fetch, is_downloadable
 from . import foundry
+from .speakers import resolve as resolve_speakers
 from .gemini import (
     LIST_MODES,
     MODE_PROMPTS,
@@ -106,6 +107,7 @@ def analyze_azure(
     clip: str | None = None,
     processing: str = "auto",
     transcript: str | None = None,
+    speakers: list[str] | None = None,
 ) -> str:
     """The Azure pipeline: everything becomes a local file first."""
     if mode == "comments":
@@ -131,8 +133,9 @@ def analyze_azure(
         url = source if source.startswith(("http://", "https://")) else youtube_url(source)
         path, description = fetch(url)
         source = str(path)
+    path = Path(source).expanduser()
     return foundry.answer(
-        Path(source).expanduser(),
+        path,
         mode=mode,
         prompt=prompt,
         model=model,
@@ -140,6 +143,7 @@ def analyze_azure(
         fps=fps,
         description=description,
         transcript=Path(transcript).expanduser() if transcript else None,
+        speakers=resolve_speakers(speakers or [], path),
     )
 
 
@@ -308,6 +312,15 @@ def main() -> None:
     )
     p.add_argument("--clip", help="analyze only this span, e.g. 1:30-2:45")
     p.add_argument(
+        "--speaker",
+        action="append",
+        metavar="NAME[=START-END]",
+        help="--provider azure: a known voice. NAME=START-END cuts a 2-10 s reference "
+        "of that voice from the recording and keeps it in ~/.config/tubetell/speakers/; "
+        "NAME alone reuses a kept one. Repeatable, at most 4; the transcript then "
+        "carries the names",
+    )
+    p.add_argument(
         "--transcript",
         help="--provider azure: use this finished (or hand-corrected) transcript — "
         "tubetell's text format or its cached JSON — instead of transcribing",
@@ -341,10 +354,13 @@ def main() -> None:
                 clip=args.clip,
                 processing=args.processing,
                 transcript=args.transcript,
+                speakers=args.speaker,
             )
         else:
             if args.transcript:
                 raise TubetellError("--transcript applies to --provider azure only.")
+            if args.speaker:
+                raise TubetellError("--speaker applies to --provider azure only.")
             result = run_gemini(args, loaded)
     except TubetellError as exc:
         sys.exit(str(exc))

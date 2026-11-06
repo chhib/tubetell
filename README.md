@@ -19,6 +19,7 @@ tubetell https://x.com/<user>/status/<id> --mode transcript --out t.md   # downl
 
 tubetell meeting.mp4 --provider azure --mode claims   # on Azure AI Foundry instead
 tubetell meeting.mp4 --provider azure --transcript corrected.md --mode claims   # from a fixed transcript
+tubetell meeting.mp4 --provider azure --speaker "Ada=0:01-0:10" --speaker Bob     # name known voices
 ```
 
 ## Providers

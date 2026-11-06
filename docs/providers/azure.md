@@ -88,6 +88,32 @@ only where the content makes it clear they are the same voice. Names follow the
 [speaker rule](../rules.md#speakers): only names spoken in the transcript,
 legible in a frame, or listed in the description are used.
 
+### Known speakers: `--speaker`
+
+Give the diarizer a few seconds of a voice and a name, and it labels that voice
+with the name, in every chunk:
+
+```bash
+# cut 2-10 s of each voice (alone) from this recording, keep them, and use them
+tubetell meeting.mp4 --provider azure --mode transcript \
+    --speaker "Ada=0:01-0:10" --speaker "Bob=1:26-1:35"
+# later recordings: the kept clips by name
+tubetell other.mp4 --provider azure --speaker Ada --speaker Bob
+```
+
+`Name=START-END` cuts that span from the recording (mono 16 kHz MP3, like the
+audio chunks) and keeps it as `~/.config/tubetell/speakers/Name.mp3`
+(`$XDG_CONFIG_HOME` replaces `~/.config`); `Name` alone reuses the kept file.
+At most four per run (the model's limit). The names and clips go with every
+transcription request as `known_speaker_names` / `known_speaker_references`.
+A known voice is labelled with its name (`[01:26] Ada: …`), an unknown one
+keeps the generic label. The chat model is told that a name label is a voice
+match and that only generic labels need reconciling. A transcript made with
+known speakers is cached under its own key (the names), next to the plain one.
+
+A reference should be one person talking, 2 to 10 s, from the same kind of
+recording (a meeting voice sounds different from a phone voice).
+
 ## Deployments
 
 | Setting | Default | Used for |

@@ -519,7 +519,7 @@ def cached_pipeline(pipeline, monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     transcribed = []
 
-    def transcribe(client, cfg, path, span, workdir, usage):
+    def transcribe(client, cfg, path, span, workdir, usage, speakers=()):
         transcribed.append(span)
         return segments_from(DIARIZED, offset=span[0], part=None)
 
@@ -587,3 +587,62 @@ def test_voice_note_follows_the_labels_not_the_chunk_plan(cached_pipeline, tmp_p
     t.write_text("[00:00] Speaker 1-A: one\n[00:10] Speaker 2-B: two\n")
     _run(cached_pipeline, transcript=t, mode="summary")
     assert "Speaker N-A" in cached_pipeline.calls[0]["messages"][0]["content"][0]["text"]
+
+
+# --- known speakers -----------------------------------------------------------------
+
+
+def test_speaker_label_keeps_a_known_name_bare():
+    assert speaker_label("Ada", 2, known=("Ada",)) == "Ada"
+    assert speaker_label("A", 2, known=("Ada",)) == "Speaker 2-A"
+
+
+def test_transcribe_sends_the_references_with_every_chunk(monkeypatch, tmp_path, capsys):
+    from tubetell.speakers import Speaker
+
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ENDPOINT)
+    ref = tmp_path / "Ada.mp3"
+    ref.write_bytes(b"\xff\xfb")
+    calls = []
+
+    def fake_run(cmd, what):
+        Path(cmd[-1]).write_bytes(b"mp3")
+
+    def create(**kw):
+        calls.append(kw)
+        named = json.loads(json.dumps(DIARIZED))
+        named["segments"][0]["speaker"] = "Ada"
+        return named
+
+    monkeypatch.setattr(foundry, "_run", fake_run)
+    client = SimpleNamespace(audio=SimpleNamespace(transcriptions=SimpleNamespace(create=create)))
+    segs = foundry.transcribe(
+        client, settings(), Path("in.mov"), (0, 1500), tmp_path, TranscriptionUsage(),
+        speakers=[Speaker("Ada", ref)],
+    )
+    assert len(calls) == 2
+    assert calls[1]["known_speaker_names"] == ["Ada"]
+    assert calls[1]["known_speaker_references"] == ["data:audio/mp3;base64,//s="]
+    assert segs[0].speaker == "Ada"
+    assert segs[1].speaker == "Speaker 1-B"
+
+
+def test_known_speakers_get_their_own_cache_and_a_softer_voice_note(cached_pipeline, monkeypatch, tmp_path):
+    from tubetell.speakers import Speaker
+
+    ref = tmp_path / "Ada.mp3"
+    ref.write_bytes(b"x")
+    seen = []
+    monkeypatch.setattr(
+        foundry, "transcribe",
+        lambda client, cfg, path, span, workdir, usage, speakers=(): seen.append(
+            [s.name for s in speakers]
+        ) or [Segment(0, 1, "Ada", "hi"), Segment(1, 2, "Speaker 1-B", "yo"), Segment(1200, 1201, "Speaker 2-A", "x")],
+    )
+    _run(cached_pipeline)  # plain: cached under the plain key
+    _run(cached_pipeline, speakers=[Speaker("Ada", ref)], mode="summary")
+    _run(cached_pipeline, speakers=[Speaker("Ada", ref)], mode="summary")
+    assert seen == [[], ["Ada"]]
+    text = cached_pipeline.calls[0]["messages"][0]["content"][0]["text"]
+    assert "Speaker N-A" in text
+    assert "A label that is a name" in text
