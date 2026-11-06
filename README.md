@@ -39,10 +39,12 @@ tubetell meeting.mp4 --provider azure --glossary terms.txt                      
 | `claims` | every checkable factual claim with timestamp and speaker |
 | `sentiment` | how tone/sentiment shifts across the runtime, each shift timestamped |
 | `comments` | audience sentiment from top comments (reads comments, not the video) |
+| `screen` | what is on each sampled frame: shown, legible, wrong (`--provider azure` only) |
 
 `--prompt "..."` overrides the mode preset entirely — ask the video anything.
+`comments` is Gemini-only; `screen` is Azure-only.
 `--model <model>` selects the model (Gemini default: `gemini-3.8-flash`; with
-`--provider azure`, the chat deployment). `comments` is Gemini-only.
+`--provider azure`, the chat deployment).
 
 Every answer carries a timestamp rule and a speaker rule, so the model neither
 writes impossible timestamps nor invents names: see

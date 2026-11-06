@@ -29,13 +29,45 @@ ffmpeg and sends the pieces:
    1024 px wide, JPEG. `--fps` replaces this with a fixed rate (`--fps 0.2` is
    one frame every 5 s, no scene detection). More than 50 frames are thinned
    evenly, keeping the first and the last.
-3. **Answer.** The mode prompt (or `--prompt`), the timestamp and speaker rules,
-   the timestamped transcript, and the frames — each preceded by its timestamp
-   as text — go to the chat deployment in one request. The runtime (or the end
-   of `--clip`) is the upper bound for every timestamp.
+3. **Screen pass.** The frames go to the chat deployment in batches of 25
+   with one question: for each frame, what is shown, which numbers, dates,
+   labels and identifiers are legible, and what looks wrong (empty tiles,
+   zeros, dates that do not match, an error message). The answers are kept as
+   JSON lines beside the transcript cache and reused by every later run on the
+   same span and sampling. `--mode screen` prints them and stops.
+4. **Answer.** The mode prompt (or `--prompt`), the timestamp and speaker rules,
+   the timestamped transcript, and the screen observations as text, one line
+   per frame, go to the chat deployment in one request. The runtime (or the end
+   of `--clip`) is the upper bound for every timestamp. `--raw-frames` sends
+   the frames themselves instead of the observations.
 
 `--mode transcript` without `--prompt` stops after step 1: tubetell formats the
 transcript itself (`[mm:ss] Speaker A: text`) and makes no chat request.
+`--mode screen` without `--prompt` runs steps 2 and 3 only.
+
+## The screen pass
+
+Given fifty frames and the question "write the tickets", the chat model does
+not look at the frames: a dashboard tile full of zeros and a wrong "closed
+through" date went unnoticed, while the same model listed both in eleven
+seconds when shown that one frame and asked what was wrong. So the frames get
+their own step with that one question, and the answer step receives what was
+seen as text:
+
+```
+[00:05] shown: Executive dashboard, Revenue tile | legible: Revenue 12.3 m, YTD Nov 2026 | wrong: Actuals closed through Nov 2026, but today is 2026-11-05
+```
+
+```bash
+tubetell meeting.mp4 --provider azure --mode screen --out screen.md     # the observations
+tubetell meeting.mp4 --provider azure --prompt "Which figures were shown?"  # answered from them
+tubetell meeting.mp4 --provider azure --raw-frames                       # the pictures instead
+```
+
+Each batch of 25 frames is about 20,000 tokens, so it fits a deployment of
+50 units; 214 frames are about 0.2 USD once per recording. The observations
+are cached as `screen-<chat deployment>-<start>-<end>-<fps or auto>.jsonl`
+next to the transcript; delete the file to read the frames again.
 
 Sources: local files work as-is. A YouTube URL or id, an X post, or any other
 page yt-dlp can read is downloaded first (`brew install yt-dlp`), the same way
