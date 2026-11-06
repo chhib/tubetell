@@ -523,3 +523,20 @@ def test_glossary_flag_is_azure_only(azure_env, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     with pytest.raises(SystemExit, match="--glossary .*--provider azure"):
         run_main(monkeypatch, ["rec.mov", "--glossary", "g.txt"])
+
+
+def test_screen_mode_and_raw_frames_are_azure_only(azure_env, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    with pytest.raises(SystemExit, match="--mode screen .*--provider azure"):
+        run_main(monkeypatch, ["rec.mov", "--mode", "screen"])
+    with pytest.raises(SystemExit, match="--raw-frames .*--provider azure"):
+        run_main(monkeypatch, ["rec.mov", "--raw-frames"])
+
+
+def test_azure_raw_frames_is_passed_to_the_pipeline(azure_env, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    seen = {}
+    monkeypatch.setattr(cli.foundry, "answer", lambda path, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["rec.mov", "--provider", "azure", "--mode", "screen", "--raw-frames"])
+    assert seen["mode"] == "screen"
+    assert seen["raw_frames"] is True

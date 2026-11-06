@@ -612,6 +612,15 @@ PIPELINE_NOTE = (
     "frame."
 )
 
+SCREEN_NOTE = (
+    "Instead of the frames themselves you are given screen observations: for each "
+    "sampled frame, at its timestamp, what was shown, which numbers, dates, labels "
+    "and identifiers were legible, and what looked wrong. Treat them as what was "
+    "on screen at that moment. Take every figure, identifier, date and on-screen "
+    "name you cite from them, exactly as written; what the observations do not "
+    "mention was not legible."
+)
+
 VOICE_NOTE = (
     "The transcript's speaker labels come from an automatic diarizer that worked "
     "on the audio in separate parts, labelling the voices of part N as "
@@ -638,17 +647,23 @@ def answer_text(
     multipart: bool,
     has_frames: bool,
     named: bool = False,
+    screen: str | None = None,
 ) -> str:
-    """The text half of the chat request: prompt, standing rules, the transcript."""
+    """The text half of the chat request: prompt, standing rules, the
+    transcript, and the screen observations when the frames were read first."""
     parts = [video_body(request, duration, description), PIPELINE_NOTE]
     if multipart:
         parts.append(VOICE_NOTE)
     if named:
         parts.append(NAMED_NOTE)
+    if screen is not None:
+        parts.append(SCREEN_NOTE)
     if transcript:
         parts.append(f"--- TRANSCRIPT ---\n{transcript}\n--- END TRANSCRIPT ---")
     else:
         parts.append("--- TRANSCRIPT ---\n(no speech was transcribed)\n--- END TRANSCRIPT ---")
+    if screen is not None:
+        parts.append(f"--- SCREEN ---\n{screen}\n--- END SCREEN ---")
     if has_frames:
         parts.append("The frames follow, in order, each after its timestamp.")
     return "\n\n".join(parts)
@@ -727,13 +742,17 @@ def answer(
     transcript: Path | None = None,
     speakers: list = (),
     glossary_terms: list[str] = (),
+    raw_frames: bool = False,
 ) -> str:
     """Run the Azure pipeline on one local file and return the answer.
 
     `speakers` are known voices (tubetell.speakers.Speaker) for step 1.
     `glossary_terms` are restored in a fresh transcript by one chat request
-    before it is cached (tubetell.glossary).
+    before it is cached (tubetell.glossary). Frames go through the screen pass
+    (tubetell.screen) and reach the answer step as text, unless `raw_frames`
+    sends the pictures themselves.
     """
+    from . import screen as screen_pass
 
     cfg = settings(model)
     if not path.exists():
@@ -753,12 +772,17 @@ def answer(
         raise TubetellError(f"{path.name} has neither an audio nor a video stream.")
 
     transcript_only = mode == "transcript" and not prompt
+    screen_only = mode == "screen" and not prompt
+    if screen_only and not info["video"]:
+        raise TubetellError(f"{path.name} has no video stream; --mode screen reads the frames.")
     client = make_client(cfg)
     usage = TranscriptionUsage()
     with tempfile.TemporaryDirectory(prefix="tubetell-azure-") as tmp:
         workdir = Path(tmp)
         segments: list[Segment] = []
-        if transcript is not None:
+        if screen_only:
+            pass
+        elif transcript is not None:
             segments = slice_segments(load_file(transcript).segments, span)
             print(f"transcript: {transcript.name} ({len(segments)} lines)", file=sys.stderr)
         elif info["audio"]:
@@ -773,6 +797,15 @@ def answer(
                 raise TubetellError("the transcription returned no speech")
             return text_transcript
         frames = sample_frames(path, span, workdir, fps=fps) if info["video"] else []
+        screen = None
+        if frames and not raw_frames:
+            observations = screen_pass.observe(client, cfg, path, span, frames, fps=fps)
+            screen = screen_pass.format_observations(observations)
+            frames = []
+        if screen_only:
+            if not screen:
+                raise TubetellError("the screen pass returned no observations")
+            return screen
         text = answer_text(
             prompt or MODE_PROMPTS[mode],
             text_transcript,
@@ -783,10 +816,11 @@ def answer(
             multipart=is_multipart(segments),
             has_frames=bool(frames),
             named=is_named(segments),
+            screen=screen,
         )
+        what = f"{len(frames)} frames" if frames else f"{screen.count(chr(10)) + 1 if screen else 0} screen observations"
         print(
-            f"asking {cfg.chat_deployment} ({len(segments)} transcript lines, "
-            f"{len(frames)} frames)...",
+            f"asking {cfg.chat_deployment} ({len(segments)} transcript lines, {what})...",
             file=sys.stderr,
         )
         return ask(client, cfg, chat_content(text, frames))

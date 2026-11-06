@@ -476,7 +476,17 @@ def pipeline(monkeypatch, tmp_path):
     (tmp_path / "f.jpg").write_bytes(b"jpg")
     calls = []
     monkeypatch.setattr(foundry, "make_client", lambda cfg: _chat_client(calls=calls))
-    return SimpleNamespace(src=src, calls=calls, frames=frames_seen)
+    # The screen pass is its own step (tests/test_screen.py); here it answers at once.
+    from tubetell import screen
+
+    observed = []
+
+    def observe(client, cfg, src, span, frames, *, fps):
+        observed.append(len(frames))
+        return [screen.Observation(f.time, "a dashboard", "Revenue 12.3", "nothing") for f in frames]
+
+    monkeypatch.setattr(screen, "observe", observe)
+    return SimpleNamespace(src=src, calls=calls, frames=frames_seen, observed=observed)
 
 
 def test_answer_transcript_mode_skips_the_chat_step(pipeline):
@@ -491,7 +501,7 @@ def test_answer_transcript_mode_skips_the_chat_step(pipeline):
 def test_answer_summary_sends_transcript_and_frames(pipeline):
     out = foundry.answer(
         pipeline.src, mode="summary", prompt=None, model="other-chat", clip=(60, 120), fps=0.5,
-        description=None,
+        description=None, raw_frames=True,
     )
     assert out == "The answer."
     assert pipeline.frames == {"span": (60.0, 120.0), "fps": 0.5}
@@ -728,3 +738,51 @@ def test_glossary_corrects_before_caching_and_keys_the_cache(cached_pipeline, mo
     assert corrected == [["Kiana"]]
     assert _run(cached_pipeline).startswith("[00:00] Speaker A: Thanks for joining.")
     assert cached_pipeline.transcribed == [(0.0, 300.0), (0.0, 300.0)]
+
+
+# --- the screen pass ------------------------------------------------------------------
+
+
+@pytest.fixture
+def screened(pipeline):
+    return pipeline
+
+
+def test_screen_mode_prints_the_observations_and_makes_no_answer_request(screened):
+    out = foundry.answer(
+        screened.src, mode="screen", prompt=None, model=None, clip=None, fps=None, description=None
+    )
+    assert out == "[00:00] shown: a dashboard | legible: Revenue 12.3 | wrong: nothing"
+    assert screened.observed == [1]
+    assert screened.calls == []
+
+
+def test_answer_step_gets_the_observations_as_text_instead_of_the_frames(screened):
+    foundry.answer(
+        screened.src, mode="summary", prompt=None, model=None, clip=None, fps=None, description=None
+    )
+    assert screened.observed == [1]
+    content = screened.calls[0]["messages"][0]["content"]
+    assert len(content) == 1  # no images
+    text = content[0]["text"]
+    assert "--- SCREEN ---\n[00:00] shown: a dashboard | legible: Revenue 12.3 | wrong: nothing\n--- END SCREEN ---" in text
+    assert "frames follow" not in text
+    assert "screen observations" in text
+
+
+def test_raw_frames_skips_the_screen_pass(screened):
+    foundry.answer(
+        screened.src, mode="summary", prompt=None, model=None, clip=None, fps=None, description=None,
+        raw_frames=True,
+    )
+    assert screened.observed == []
+    content = screened.calls[0]["messages"][0]["content"]
+    assert content[1] == {"type": "text", "text": "[frame 00:00]"}
+
+
+def test_screen_mode_needs_video(pipeline, monkeypatch):
+    monkeypatch.setattr(foundry, "streams", lambda p: {"audio": True, "video": False, "duration": 300.0})
+    with pytest.raises(TubetellError, match="no video"):
+        foundry.answer(
+            pipeline.src, mode="screen", prompt=None, model=None, clip=None, fps=None, description=None
+        )

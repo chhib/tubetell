@@ -21,6 +21,8 @@ Modes (--mode), each a tuned prompt preset:
     comments    pulls top comments via the YouTube API, analyzes audience
                 sentiment (this mode reads comments, not the video —
                 YouTube only)
+    screen      what is on each sampled frame: shown, legible, wrong
+                (--provider azure only)
 
 --prompt overrides the mode preset entirely. Either way the request carries a
 timestamp rule: mm:ss inside the first hour, h:mm:ss past it, and — when the
@@ -109,6 +111,7 @@ def analyze_azure(
     transcript: str | None = None,
     speakers: list[str] | None = None,
     glossary: str | None = None,
+    raw_frames: bool = False,
 ) -> str:
     """The Azure pipeline: everything becomes a local file first."""
     if mode == "comments":
@@ -147,6 +150,7 @@ def analyze_azure(
         transcript=Path(transcript).expanduser() if transcript else None,
         speakers=resolve_speakers(speakers or [], path),
         glossary_terms=terms,
+        raw_frames=raw_frames,
     )
 
 
@@ -293,7 +297,13 @@ def main() -> None:
         help="YouTube URL, youtu.be link, bare video id, gs:// URI, a local video/audio "
         "file, or another video page yt-dlp can download (x.com, vimeo.com, ...)",
     )
-    p.add_argument("--mode", default="summary", choices=list(MODE_PROMPTS) + ["comments"])
+    p.add_argument(
+        "--mode",
+        default="summary",
+        choices=list(MODE_PROMPTS) + ["comments", "screen"],
+        help="what to ask (default: summary); screen (--provider azure) prints what "
+        "is on each sampled frame",
+    )
     p.add_argument("--prompt", help="override the mode preset with a custom prompt")
     p.add_argument(
         "--provider",
@@ -341,6 +351,12 @@ def main() -> None:
         "(default: ~/.config/tubetell/glossary.txt when it exists)",
     )
     p.add_argument(
+        "--raw-frames",
+        action="store_true",
+        help="--provider azure: send the frames themselves to the answer step instead "
+        "of reading them first (the screen pass)",
+    )
+    p.add_argument(
         "--transcript",
         help="--provider azure: use this finished (or hand-corrected) transcript — "
         "tubetell's text format or its cached JSON — instead of transcribing",
@@ -376,6 +392,7 @@ def main() -> None:
                 transcript=args.transcript,
                 speakers=args.speaker,
                 glossary=args.glossary,
+                raw_frames=args.raw_frames,
             )
         else:
             if args.transcript:
@@ -384,6 +401,10 @@ def main() -> None:
                 raise TubetellError("--speaker applies to --provider azure only.")
             if args.glossary:
                 raise TubetellError("--glossary applies to --provider azure only.")
+            if args.mode == "screen":
+                raise TubetellError("--mode screen applies to --provider azure only.")
+            if args.raw_frames:
+                raise TubetellError("--raw-frames applies to --provider azure only.")
             result = run_gemini(args, loaded)
     except TubetellError as exc:
         sys.exit(str(exc))
