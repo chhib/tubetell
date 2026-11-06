@@ -509,3 +509,81 @@ def test_answer_missing_file(monkeypatch, tmp_path):
             tmp_path / "nope.mp4", mode="summary", prompt=None, model=None, clip=None, fps=None,
             description=None,
         )
+
+
+# --- the transcript cache and --transcript -------------------------------------------
+
+
+@pytest.fixture
+def cached_pipeline(pipeline, monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    transcribed = []
+
+    def transcribe(client, cfg, path, span, workdir, usage):
+        transcribed.append(span)
+        return segments_from(DIARIZED, offset=span[0], part=None)
+
+    monkeypatch.setattr(foundry, "transcribe", transcribe)
+    pipeline.transcribed = transcribed
+    return pipeline
+
+
+def _run(p, **kw):
+    args = dict(mode="transcript", prompt=None, model=None, clip=None, fps=None, description=None, transcript=None)
+    args.update(kw)
+    return foundry.answer(p.src, **args)
+
+
+def test_second_run_reads_the_cached_transcript(cached_pipeline, capsys):
+    first = _run(cached_pipeline)
+    second = _run(cached_pipeline)
+    assert first == second
+    assert cached_pipeline.transcribed == [(0.0, 300.0)]
+    assert "transcript: cached" in capsys.readouterr().err
+
+
+def test_a_clip_is_sliced_from_the_cached_full_transcript(cached_pipeline):
+    _run(cached_pipeline)
+    out = _run(cached_pipeline, clip=(3, 60))
+    assert cached_pipeline.transcribed == [(0.0, 300.0)]
+    assert out == "[00:04] Speaker B: Glad to be here.\n[00:12] Speaker A: Let's start."
+
+
+def test_a_clip_outside_the_cache_is_transcribed_and_cached(cached_pipeline):
+    _run(cached_pipeline, clip=(60, 120))
+    _run(cached_pipeline, clip=(60, 120))
+    assert cached_pipeline.transcribed == [(60.0, 120.0)]
+
+
+def test_another_transcribe_deployment_has_its_own_cache(cached_pipeline, monkeypatch):
+    _run(cached_pipeline)
+    monkeypatch.setenv("AZURE_OPENAI_TRANSCRIBE_DEPLOYMENT", "other-stt")
+    _run(cached_pipeline)
+    assert len(cached_pipeline.transcribed) == 2
+
+
+def test_transcript_file_replaces_transcription(cached_pipeline, tmp_path, capsys):
+    corrected = tmp_path / "corrected.md"
+    corrected.write_text("[00:00] Ada: Thanks for joining.\n[00:05] Bob: Glad to be here.\n")
+    out = _run(cached_pipeline, transcript=corrected)
+    assert out == "[00:00] Ada: Thanks for joining.\n[00:05] Bob: Glad to be here."
+    assert cached_pipeline.transcribed == []
+    assert "transcript: corrected.md" in capsys.readouterr().err
+    # The corrected names are what the chat step sees, and no part-label note.
+    _run(cached_pipeline, transcript=corrected, mode="summary")
+    text = cached_pipeline.calls[0]["messages"][0]["content"][0]["text"]
+    assert "[00:05] Bob: Glad to be here." in text
+    assert "Speaker N-A" not in text
+
+
+def test_transcript_file_is_sliced_by_clip(cached_pipeline, tmp_path):
+    t = tmp_path / "t.md"
+    t.write_text("[00:00] Ada: one\n[01:00] Ada: two\n[02:00] Ada: three\n")
+    assert _run(cached_pipeline, transcript=t, clip=(50, 110)) == "[01:00] Ada: two"
+
+
+def test_voice_note_follows_the_labels_not_the_chunk_plan(cached_pipeline, tmp_path):
+    t = tmp_path / "t.md"
+    t.write_text("[00:00] Speaker 1-A: one\n[00:10] Speaker 2-B: two\n")
+    _run(cached_pipeline, transcript=t, mode="summary")
+    assert "Speaker N-A" in cached_pipeline.calls[0]["messages"][0]["content"][0]["text"]

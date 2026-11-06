@@ -36,6 +36,7 @@ from pathlib import Path
 from . import TubetellError
 from .config import user_config_path
 from .gemini import MODE_PROMPTS, video_body
+from .transcript import Segment, Transcript, cache_path, is_multipart, load_file, slice_segments
 
 TRANSCRIBE_DEPLOYMENT = "gpt-4o-transcribe-diarize"
 CHAT_DEPLOYMENT = "gpt-6.1-terra"
@@ -201,14 +202,6 @@ def stamp(seconds: float) -> str:
 
 
 # --- step 1: audio -> diarized transcript -------------------------------------
-
-
-@dataclass(frozen=True)
-class Segment:
-    start: float
-    end: float
-    speaker: str
-    text: str
 
 
 def plan_chunks(
@@ -396,6 +389,34 @@ def transcribe(
         usage.add(_field(resp, "usage"))
         per_chunk.append(segments_from(resp, offset=chunk[0], part=i if several else None))
     return merge_chunks(chunks, per_chunk)
+
+
+def cached_transcript(cfg: Settings, src: Path, span: tuple[float, float]) -> list[Segment] | None:
+    """The span's segments from the cache: the file for this exact span, or a
+    slice of any cached span of the same deployment that contains it."""
+    exact = cache_path(src, span, cfg.transcribe_deployment)
+    candidates = [exact] + sorted(exact.parent.glob(f"{cfg.transcribe_deployment}-*.json"))
+    for path in candidates:
+        if not path.is_file():
+            continue
+        cached = Transcript.load(path)
+        if not cached.covers(span):
+            continue
+        segments = slice_segments(cached.segments, span)
+        print(f"transcript: cached ({path}, {len(segments)} lines)", file=sys.stderr)
+        return segments
+    return None
+
+
+def transcribe_and_cache(
+    cfg: Settings, src: Path, span: tuple[float, float], workdir: Path, usage: TranscriptionUsage
+) -> list[Segment]:
+    segments = transcribe(make_transcribe_client(cfg), cfg, src, span, workdir, usage)
+    print(usage.line(), file=sys.stderr)
+    path = cache_path(src, span, cfg.transcribe_deployment)
+    Transcript(src.name, span, cfg.transcribe_deployment, segments).save(path)
+    print(f"transcript: saved to {path}", file=sys.stderr)
+    return segments
 
 
 # --- step 2: frames -----------------------------------------------------------
@@ -595,6 +616,7 @@ def answer(
     clip: tuple[int, int] | None,
     fps: float | None,
     description: str | None,
+    transcript: Path | None = None,
 ) -> str:
     """Run the Azure pipeline on one local file and return the answer."""
     cfg = settings(model)
@@ -620,25 +642,29 @@ def answer(
     with tempfile.TemporaryDirectory(prefix="tubetell-azure-") as tmp:
         workdir = Path(tmp)
         segments: list[Segment] = []
-        if info["audio"]:
-            segments = transcribe(make_transcribe_client(cfg), cfg, path, span, workdir, usage)
-            print(usage.line(), file=sys.stderr)
+        if transcript is not None:
+            segments = slice_segments(load_file(transcript).segments, span)
+            print(f"transcript: {transcript.name} ({len(segments)} lines)", file=sys.stderr)
+        elif info["audio"]:
+            segments = cached_transcript(cfg, path, span) or transcribe_and_cache(
+                cfg, path, span, workdir, usage
+            )
         elif transcript_only:
             raise TubetellError(f"{path.name} has no audio track to transcribe.")
-        transcript = format_transcript(segments)
+        text_transcript = format_transcript(segments)
         if transcript_only:
-            if not transcript:
+            if not text_transcript:
                 raise TubetellError("the transcription returned no speech")
-            return transcript
+            return text_transcript
         frames = sample_frames(path, span, workdir, fps=fps) if info["video"] else []
         text = answer_text(
             prompt or MODE_PROMPTS[mode],
-            transcript,
+            text_transcript,
             # Timestamps are on the source's clock, so the bound is where the
             # analyzed span ends, clip or not.
             duration=span[1],
             description=description,
-            multipart=len(plan_chunks(*span)) > 1,
+            multipart=is_multipart(segments),
             has_frames=bool(frames),
         )
         print(

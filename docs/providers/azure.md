@@ -43,6 +43,39 @@ post's text becomes the speaker roster. `gs://` objects are not supported, and
 neither is `--mode comments`, which reads YouTube comments through Gemini.
 
 The pieces live in a temporary directory that is deleted when the run ends.
+The transcript is kept, see below.
+
+## The transcript is made once
+
+Transcription is the slow and expensive step (about a minute and 0.03 USD per
+minute of audio), and one recording is usually asked several things. So the
+diarized segments are written once, as JSON, to
+`~/.cache/tubetell/transcripts/<content hash>/<deployment>-<start>-<end>.json`
+(`$XDG_CACHE_HOME` replaces `~/.cache`), and every later run on the same file
+reads them back:
+
+```
+transcript: cached (~/.cache/tubetell/transcripts/3f2a…/gpt-4o-transcribe-diarize-0-2096.json, 518 lines)
+```
+
+The key is the file's content, not its name, so a copy or a renamed file hits
+the same cache. A `--clip` inside a cached span is sliced from it without a
+request; a span the cache does not cover is transcribed and cached on its own.
+A different transcription deployment gets its own file. Delete the file to
+transcribe again.
+
+**`--transcript <file>`** skips transcription and uses a finished transcript
+instead: the cached JSON, or tubetell's own text format (`[mm:ss] Speaker:
+text`, one line per segment, as `--mode transcript` writes it). Correct the
+names and the terms the model misheard in that file once, and every later
+answer, the ticket prompt included, is built on the corrected text. With
+`--clip` the file is sliced to the span.
+
+```bash
+tubetell meeting.mp4 --provider azure --mode transcript --out t.md   # transcribes once
+# fix names in t.md, then:
+tubetell meeting.mp4 --provider azure --transcript t.md --prompt "Which decisions were made, by whom?"
+```
 
 ## Speakers
 

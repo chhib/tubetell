@@ -18,6 +18,7 @@ tubetell gameplay.mov --fps 2 --clip 1:30-2:45      # static: exact frames, one 
 tubetell https://x.com/<user>/status/<id> --mode transcript --out t.md   # downloaded first
 
 tubetell meeting.mp4 --provider azure --mode claims   # on Azure AI Foundry instead
+tubetell meeting.mp4 --provider azure --transcript corrected.md --mode claims   # from a fixed transcript
 ```
 
 ## Providers
