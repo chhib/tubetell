@@ -149,7 +149,27 @@ carry the chunk number, `Speaker 2-A` meaning voice A of part 2. In every mode
 except a plain transcript, the chat model is told this and asked to merge labels
 only where the content makes it clear they are the same voice. Names follow the
 [speaker rule](../rules.md#speakers): only names spoken in the transcript,
-legible in a frame, or listed in the description are used.
+legible in a frame, or listed in the description are used. A local recording
+has no description, so `--roster "Ada (host), Bob (guest)"` (or `--roster
+people.txt`) supplies that list; it also replaces a downloaded page's
+description.
+
+## Tickets
+
+`--mode tickets` asks for the work items the discussion calls for, written so
+that a colleague who was not there can pick one up: a title, what to do and
+why, the evidence (timestamps, and the exact figures, dates, account numbers,
+identifiers and labels as said or shown on screen), and an owner only when
+someone is heard taking it by name, otherwise `unassigned`. Points about how
+the group works (meetings, tooling, process) go under a separate `To do (ways
+of working)` heading, not as tickets.
+
+```bash
+tubetell meeting.mp4 --provider azure --mode tickets --roster "Ada (finance), Bob (data)" --out tickets.md
+```
+
+The mode is a prompt preset, so it works with the Gemini provider too; on
+Azure the figures come from the transcript and the screen observations.
 
 ### Known speakers: `--speaker`
 

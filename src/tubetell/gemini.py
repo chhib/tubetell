@@ -36,6 +36,20 @@ MODE_PROMPTS = {
         "how it shifts across the runtime (timestamp each notable shift), each "
         "speaker's attitude, and any emotionally charged or tense moments."
     ),
+    "tickets": (
+        "List the work items this discussion asks for, as tickets a colleague could "
+        "pick up without having been there. For each ticket give: a one-line title; "
+        "what to do and why, in two or three sentences; the evidence: the "
+        "timestamp(s) where it comes up, and the exact figures, dates, amounts, "
+        "account numbers, identifiers and labels involved, copied as they were said "
+        "or shown on screen (never rounded, converted or paraphrased); and the "
+        "owner, only when someone is heard taking it or being given it by name, "
+        "otherwise `unassigned`. Order the tickets by when they first come up and "
+        "leave out anything said to be already done. Then, under a separate heading "
+        "`To do (ways of working)`, list as short bullets the points about how the "
+        "group works (meetings, tooling, process, who to involve, where to track "
+        "things); these are not tickets."
+    ),
 }
 
 # Left to itself Gemini writes `mm:ss` and keeps writing it past the hour mark,
@@ -75,12 +89,12 @@ SPEAKER_RULE = (
 )
 
 ROSTER_RULE = (
-    "The people below are taken from the video's own published description. Use "
-    "these spellings when you can match a voice to one of them, and treat the "
-    "list as the only names you may assume are in this video — it is not "
-    "necessarily complete, so someone who is clearly not on it still gets a "
-    "generic label rather than a guessed name.\n\n"
-    "--- FROM THE VIDEO DESCRIPTION ---\n{description}\n--- END DESCRIPTION ---"
+    "The people below come with the video: its published description, or a "
+    "roster given by whoever asked. Use these spellings when you can match a "
+    "voice to one of them, and treat the list as the only names you may assume "
+    "are in this video — it is not necessarily complete, so someone who is "
+    "clearly not on it still gets a generic label rather than a guessed name.\n\n"
+    "--- FROM THE VIDEO DESCRIPTION OR ROSTER ---\n{description}\n--- END ---"
 )
 
 COMMENTS_PROMPT = (

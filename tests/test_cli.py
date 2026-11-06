@@ -540,3 +540,31 @@ def test_azure_raw_frames_is_passed_to_the_pipeline(azure_env, monkeypatch):
     run_main(monkeypatch, ["rec.mov", "--provider", "azure", "--mode", "screen", "--raw-frames"])
     assert seen["mode"] == "screen"
     assert seen["raw_frames"] is True
+
+
+def test_roster_text_becomes_the_description_for_a_local_file(azure_env, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    seen = {}
+    monkeypatch.setattr(cli.foundry, "answer", lambda path, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["rec.mov", "--provider", "azure", "--roster", "Ada (host), Bob"])
+    assert seen["description"] == "Ada (host), Bob"
+
+
+def test_roster_file_is_read_and_wins_over_a_downloaded_description(azure_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    roster = tmp_path / "roster.txt"
+    roster.write_text("Ada: host\nBob: guest\n")
+    monkeypatch.setattr(cli, "fetch", lambda url: (tmp_path / "video.mp4", "Host: Someone Else"))
+    seen = {}
+    monkeypatch.setattr(cli.foundry, "answer", lambda path, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["vOVKnYoH1p4", "--provider", "azure", "--roster", str(roster)])
+    assert seen["description"] == "Ada: host\nBob: guest"
+
+
+def test_roster_reaches_the_gemini_path_too(azure_env, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    seen = {}
+    monkeypatch.setattr(cli, "analyze", lambda url, **kw: seen.update(kw) or "ok")
+    run_main(monkeypatch, ["rec.mov", "--roster", "Ada", "--mode", "tickets"])
+    assert seen["roster"] == "Ada"
+    assert seen["mode"] == "tickets"

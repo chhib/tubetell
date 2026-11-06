@@ -18,6 +18,9 @@ Modes (--mode), each a tuned prompt preset:
     transcript  full timestamped transcript, one line per segment
     claims      every concrete factual claim with its timestamp and speaker
     sentiment   how tone/sentiment shifts across the video, with markers
+    tickets     the work items the discussion asks for, each with timestamps,
+                exact figures and identifiers, and an owner only when named;
+                ways of working listed separately
     comments    pulls top comments via the YouTube API, analyzes audience
                 sentiment (this mode reads comments, not the video —
                 YouTube only)
@@ -112,6 +115,7 @@ def analyze_azure(
     speakers: list[str] | None = None,
     glossary: str | None = None,
     raw_frames: bool = False,
+    roster: str | None = None,
 ) -> str:
     """The Azure pipeline: everything becomes a local file first."""
     if mode == "comments":
@@ -146,7 +150,7 @@ def analyze_azure(
         model=model,
         clip=span,
         fps=fps,
-        description=description,
+        description=roster_text(roster) or description,
         transcript=Path(transcript).expanduser() if transcript else None,
         speakers=resolve_speakers(speakers or [], path),
         glossary_terms=terms,
@@ -164,6 +168,16 @@ def glossary_terms(flag: str | None) -> list[str]:
     return load_terms(default_path()) if default_path().is_file() else []
 
 
+def roster_text(roster: str | None) -> str | None:
+    """The --roster value: the file's text when it names a file, else itself."""
+    if not roster:
+        return None
+    path = Path(roster).expanduser()
+    if path.is_file():
+        return path.read_text(encoding="utf-8").strip()
+    return roster.strip()
+
+
 def analyze(
     source: str,
     *,
@@ -176,6 +190,7 @@ def analyze(
     width: int = 1280,
     transcode: bool = True,
     processing: str = "auto",
+    roster: str | None = None,
 ) -> str:
     if mode == "comments":
         if looks_like_path(source) or is_downloadable(source):
@@ -204,7 +219,7 @@ def analyze(
     # the original video, so only an uncut source gets a runtime to cite against.
     # The description grounds speaker names and stays valid for a clip.
     full_duration, description = source_facts(source)
-    description = description or post_text
+    description = roster_text(roster) or description or post_text
     duration = None if span else full_duration
     if path == "agentic":
         return agentic_answer(
@@ -335,6 +350,12 @@ def main() -> None:
     )
     p.add_argument("--clip", help="analyze only this span, e.g. 1:30-2:45")
     p.add_argument(
+        "--roster",
+        metavar="TEXT|FILE",
+        help="who is in the recording, with roles (text, or a file holding it); the "
+        "only names the answer may use, like a YouTube description's",
+    )
+    p.add_argument(
         "--speaker",
         action="append",
         metavar="NAME[=START-END]",
@@ -393,6 +414,7 @@ def main() -> None:
                 speakers=args.speaker,
                 glossary=args.glossary,
                 raw_frames=args.raw_frames,
+                roster=args.roster,
             )
         else:
             if args.transcript:
@@ -435,6 +457,7 @@ def run_gemini(args: argparse.Namespace, loaded: list[Path]) -> str:
         width=args.width,
         transcode=not args.no_transcode,
         processing=args.processing,
+        roster=args.roster,
     )
 
 
