@@ -138,7 +138,7 @@ def observe(client, cfg, src: Path, span: tuple[float, float], frames: list, *, 
     )
     observations: list[Observation] = []
     for group in groups:
-        answer = ask(client, cfg, chat_content(screen_request(group), group))
+        answer = ask(client, cfg, chat_content(screen_request(group), group))[0]
         observations.extend(parse_answer(answer, [f.time for f in group]))
     save(path, observations)
     print(f"screen: saved to {path}", file=sys.stderr)

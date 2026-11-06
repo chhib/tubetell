@@ -73,7 +73,9 @@ def _client(reply):
         )
         return parsed
 
-    return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    return SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(with_raw_response=SimpleNamespace(
+        create=lambda **kw: SimpleNamespace(headers={}, parse=lambda: create(**kw))
+    ))))
 
 
 def test_correct_applies_the_models_changes_and_reports(monkeypatch, capsys):

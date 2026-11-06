@@ -244,11 +244,44 @@ Neither the token nor the key is ever printed.
 | Transcription file size | 25 MB per request | 20-minute chunks are ~4.8 MB |
 | Transcription duration | not documented; reported as ~1400 s for the diarize model | 20-minute (1200 s) chunks; 5-minute with `--speaker` |
 | Speaker labels | consistent within one request only | per-chunk labels, reconciled in step 3 |
-| Frames per chat request | 50 (tubetell's cap; ~1,000 input tokens each at high detail) | thinned evenly |
+| Frames per run | 50 (tubetell's cap; ~800 input tokens each at high detail) | thinned evenly |
+| Tokens per minute (the deployment's capacity) | what the deployment was created with; 1 unit = 1,000 TPM | the request is cut to fit, see below |
 | Model lifetime | OpenAI lists `gpt-4o-transcribe-diarize` as deprecated, shutting down 2027-02-26 (Azure retirement dates may differ) | point `AZURE_OPENAI_TRANSCRIBE_DEPLOYMENT` at its successor |
 
-The OpenAI client retries 429s and 5xx itself (up to 4 times) and gives each
-request ten minutes.
+The OpenAI client retries 429s and 5xx itself (up to 4 times, waiting what
+`Retry-After` says up to a minute) and gives each request ten minutes.
+
+### Fitting the request to the deployment's rate limit
+
+A deployment allows a fixed number of tokens per minute (its *capacity*: 50
+units is 50,000 TPM). A request larger than that can never go through, however
+often it is retried. tubetell therefore sizes the request before sending it:
+
+1. It estimates the request: text at four characters a token, plus 800 tokens
+   per frame.
+2. When the estimate is over 10,000 tokens it asks the deployment for its limit
+   with one tiny request and reads `x-ratelimit-limit-tokens` from the answer.
+3. Frames are sent in as many requests as fit 90 % of the limit beside the
+   text, in order; with more than one request, the answers are merged by one
+   more request (the same merge the Gemini provider uses for long videos):
+
+   ```
+   50 frames do not fit one request of 50,000 tokens per minute; sending 2 requests, then merging.
+   ```
+
+4. When the text alone does not fit, or a 429 survives the retries, the error
+   says how big the request was and what the deployment allows:
+
+   ```
+   Azure OpenAI error 429: ... This request was about 74,000 tokens (50 frames);
+   the deployment allows 50,000 tokens per minute. Raise the deployment's
+   capacity in Azure AI Foundry, lower --fps, or analyze a shorter span with --clip.
+   ```
+
+Raising the capacity costs nothing by itself (billing is per token): in Azure
+AI Foundry, open the deployment and set *Tokens per minute rate limit*, or
+`az cognitiveservices account deployment create` with the same model, version
+and SKU and a higher `--sku-capacity`.
 
 ## Cost
 
@@ -271,6 +304,10 @@ OpenAI User role on the resource, or `az login` is on another tenant
 
 **`Azure OpenAI error 404`.** The endpoint is wrong, or the deployment name
 does not exist on that resource.
+
+**`Azure OpenAI error 429`.** The deployment's tokens-per-minute limit; the
+message names the request size and the limit. Raise the deployment's capacity,
+or send less (`--fps`, `--clip`).
 
 **`Could not get an Entra ID token`.** Run `az login`, or set
 `AZURE_OPENAI_API_KEY`.

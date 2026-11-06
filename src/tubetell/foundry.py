@@ -35,7 +35,7 @@ from pathlib import Path
 
 from . import TubetellError
 from .config import user_config_path
-from .gemini import MODE_PROMPTS, video_body
+from .gemini import MODE_PROMPTS, merge_body, video_body
 from .transcript import (
     Segment,
     Transcript,
@@ -72,9 +72,19 @@ FRAME_INTERVAL = 10.0
 SCENE_THRESHOLD = 0.3
 SCENE_MIN_GAP = 2.0
 FRAME_WIDTH = 1024
-# The most images one chat request carries. Each 1024px frame costs roughly a
+# The most images one run looks at. Each 1024px frame costs roughly a
 # thousand input tokens at high detail, so 50 is ~50k tokens of pictures.
 MAX_FRAMES = 50
+
+# What one request may cost against the deployment's tokens-per-minute limit:
+# a 1024-px frame at high detail is 765 tokens of image plus its label, text
+# is about four characters a token, and the estimate is rough, so a request
+# is sent only when it fills at most this share of the limit.
+FRAME_TOKENS = 800
+TEXT_CHARS_PER_TOKEN = 4
+LIMIT_HEADROOM = 0.9
+# A request this small is sent without asking the deployment for its limit.
+PROBE_ABOVE = 10_000
 
 REQUEST_TIMEOUT = 10 * 60
 
@@ -684,6 +694,44 @@ def chat_content(text: str, frames: list[Frame], image_url=_data_url) -> list[di
     return content
 
 
+def estimate_request(text: str, frames: int) -> int:
+    """About how many input tokens a request with this text and that many
+    high-detail frames costs."""
+    return len(text) // TEXT_CHARS_PER_TOKEN + frames * FRAME_TOKENS
+
+
+def token_limit(headers) -> int | None:
+    """The deployment's tokens-per-minute limit, as Azure reports it on every
+    chat response (`x-ratelimit-limit-tokens`)."""
+    try:
+        return int(headers.get("x-ratelimit-limit-tokens"))
+    except (TypeError, ValueError):
+        return None
+
+
+def batches(frames: list[Frame], *, text_tokens: int, limit: int | None) -> list[list[Frame]]:
+    """The frames in groups that fit one request beside the text, in order.
+
+    A deployment's limit is per minute, and a request larger than it can never
+    go through, however often it is retried, so the request is cut to fit
+    instead. Without a known limit everything goes in one request.
+    """
+    if limit is None:
+        return [frames]
+    room = int(limit * LIMIT_HEADROOM) - text_tokens
+    if room < 0:
+        raise TubetellError(
+            f"The request's text alone is about {text_tokens:,} tokens, and the chat "
+            f"deployment allows {limit:,} tokens per minute. Raise the deployment's "
+            "capacity (tokens per minute) in Azure AI Foundry, or analyze a shorter "
+            "span with --clip START-END."
+        )
+    if not frames:
+        return [[]]
+    per_batch = max(1, room // FRAME_TOKENS)
+    return [frames[i : i + per_batch] for i in range(0, len(frames), per_batch)]
+
+
 def format_chat_usage(usage) -> str | None:
     """The tokens line, in the Gemini paths' shape: in + thinking + out = total."""
     if usage is None:
@@ -700,16 +748,41 @@ def format_chat_usage(usage) -> str | None:
     return f"tokens: {' + '.join(parts)} = {total:,} total"
 
 
-def ask(client, cfg: Settings, content: list[dict]) -> str:
+def _rate_limit_error(exc, content: list[dict]) -> TubetellError:
+    """A 429 that survived the client's retries (which wait what Retry-After
+    says, up to a minute): say how big the request was and what the
+    deployment allows, since that is what decides whether retrying can help."""
+    text = sum(len(c.get("text", "")) for c in content if c.get("type") == "text")
+    frames = sum(1 for c in content if c.get("type") == "image_url")
+    estimate = estimate_request("x" * text, frames)
+    limit = token_limit(getattr(getattr(exc, "response", None), "headers", None) or {})
+    allowed = f"{limit:,} tokens per minute" if limit else "fewer tokens per minute than that"
+    return TubetellError(
+        f"Azure OpenAI error 429: the chat deployment's rate limit was hit and did "
+        f"not clear within the retries. This request was about {estimate:,} tokens "
+        f"({frames} frames); the deployment allows {allowed}. Raise the deployment's "
+        "capacity in Azure AI Foundry, lower --fps, or analyze a shorter span with "
+        "--clip."
+    )
+
+
+def ask(client, cfg: Settings, content: list[dict]) -> tuple[str, int | None]:
+    """One chat request: the answer text and the deployment's token limit."""
+    from openai import RateLimitError
+
     try:
-        resp = client.chat.completions.create(
+        raw = client.chat.completions.with_raw_response.create(
             model=cfg.chat_deployment,
             messages=[{"role": "user", "content": content}],
         )
     except TubetellError:
         raise
+    except RateLimitError as exc:
+        raise _rate_limit_error(exc, content) from exc
     except Exception as exc:
         raise _api_error(exc) from exc
+    limit = token_limit(raw.headers)
+    resp = raw.parse()
     line = format_chat_usage(_field(resp, "usage"))
     if line:
         print(line, file=sys.stderr)
@@ -724,7 +797,48 @@ def ask(client, cfg: Settings, content: list[dict]) -> str:
     text = _field(message, "content") if message is not None else None
     if not text:
         raise TubetellError("the model returned no answer")
-    return text
+    return text, limit
+
+
+def probe_limit(client, cfg: Settings) -> int | None:
+    """The deployment's tokens-per-minute limit, from the headers of one tiny
+    request. Costs a few tokens; saves sending a request that cannot fit."""
+    try:
+        raw = client.chat.completions.with_raw_response.create(
+            model=cfg.chat_deployment,
+            messages=[{"role": "user", "content": [{"type": "text", "text": "Say OK."}]}],
+            max_completion_tokens=16,
+        )
+    except Exception as exc:
+        raise _api_error(exc) from exc
+    limit = token_limit(raw.headers)
+    if limit:
+        print(f"  deployment limit: {limit:,} tokens per minute", file=sys.stderr)
+    return limit
+
+
+def ask_fitted(client, cfg: Settings, text: str, frames: list[Frame], request: str) -> str:
+    """The answer, from one request when it fits the deployment's limit, else
+    from one request per batch of frames and a merge of their answers."""
+    text_tokens = estimate_request(text, 0)
+    limit = None
+    if estimate_request(text, len(frames)) > PROBE_ABOVE:
+        limit = probe_limit(client, cfg)
+    groups = batches(frames, text_tokens=text_tokens, limit=limit)
+    if len(groups) == 1:
+        return ask(client, cfg, chat_content(text, groups[0]))[0]
+    print(
+        f"  {len(frames)} frames do not fit one request of {limit:,} tokens per minute; "
+        f"sending {len(groups)} requests, then merging.",
+        file=sys.stderr,
+    )
+    answers = []
+    for group in groups:
+        span = (group[0].time, group[-1].time)
+        print(f"  frames {stamp(span[0])}-{stamp(span[1])}", file=sys.stderr)
+        answers.append(((int(span[0]), int(span[1])), ask(client, cfg, chat_content(text, group))[0]))
+    merged = merge_body(request, answers)
+    return ask(client, cfg, [{"type": "text", "text": merged}])[0]
 
 
 # --- the whole path -------------------------------------------------------------
@@ -806,8 +920,9 @@ def answer(
             if not screen:
                 raise TubetellError("the screen pass returned no observations")
             return screen
+        request = prompt or MODE_PROMPTS[mode]
         text = answer_text(
-            prompt or MODE_PROMPTS[mode],
+            request,
             text_transcript,
             # Timestamps are on the source's clock, so the bound is where the
             # analyzed span ends, clip or not.
@@ -823,4 +938,4 @@ def answer(
             f"asking {cfg.chat_deployment} ({len(segments)} transcript lines, {what})...",
             file=sys.stderr,
         )
-        return ask(client, cfg, chat_content(text, frames))
+        return ask_fitted(client, cfg, text, frames, request)
