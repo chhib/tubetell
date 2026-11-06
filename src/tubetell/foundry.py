@@ -45,6 +45,7 @@ from .transcript import (
     load_file,
     slice_segments,
 )
+from .prices import chat_cost, format_usd, transcription_cost
 
 TRANSCRIBE_DEPLOYMENT = "gpt-4o-transcribe-diarize"
 CHAT_DEPLOYMENT = "gpt-6.1-terra"
@@ -381,9 +382,14 @@ def _run(cmd: list[str], what: str) -> subprocess.CompletedProcess:
 
 @dataclass
 class TranscriptionUsage:
+    """What the transcription requests used, and the run's cost so far in USD
+    (transcription and chat), when every deployment used has a known price."""
+
+    deployment: str = ""
     requests: int = 0
     seconds: float = 0.0
     tokens: int = 0
+    cost: float | None = 0.0
 
     def add(self, usage) -> None:
         self.requests += 1
@@ -393,6 +399,11 @@ class TranscriptionUsage:
             self.tokens += int(_field(usage, "total_tokens", 0) or 0)
         else:
             self.seconds += float(_field(usage, "seconds", 0) or 0)
+        self.charge(transcription_cost(self.deployment, usage))
+
+    def charge(self, amount: float | None) -> None:
+        """Add one request's cost; an unpriced request makes the total unknown."""
+        self.cost = None if amount is None or self.cost is None else self.cost + amount
 
     def line(self) -> str:
         parts = []
@@ -402,7 +413,12 @@ class TranscriptionUsage:
             parts.append(f"{self.tokens:,} tokens")
         what = " + ".join(parts) or "audio"
         n = self.requests
-        return f"transcribed: {what} in {n:,} request{'s' if n != 1 else ''}"
+        line = f"transcribed: {what} in {n:,} request{'s' if n != 1 else ''}"
+        return _with_cost(line, self.cost)
+
+
+def _with_cost(line: str, cost: float | None) -> str:
+    return f"{line} ≈ {format_usd(cost)}" if cost is not None else line
 
 
 def transcribe(
@@ -520,7 +536,7 @@ def transcribe_and_cache(
     segments = transcribe(make_transcribe_client(cfg), cfg, src, span, workdir, usage, speakers)
     print(usage.line(), file=sys.stderr)
     if glossary_terms:
-        segments = glossary.correct(client, cfg, segments, list(glossary_terms))
+        segments = glossary.correct(client, cfg, segments, list(glossary_terms), usage)
     tag = transcript_tag(speakers, glossary_terms)
     path = cache_path(src, span, cfg.transcribe_deployment, tag=tag)
     Transcript(src.name, span, cfg.transcribe_deployment, segments, tag=tag).save(path)
@@ -732,8 +748,9 @@ def batches(frames: list[Frame], *, text_tokens: int, limit: int | None) -> list
     return [frames[i : i + per_batch] for i in range(0, len(frames), per_batch)]
 
 
-def format_chat_usage(usage) -> str | None:
-    """The tokens line, in the Gemini paths' shape: in + thinking + out = total."""
+def format_chat_usage(usage, deployment: str = "") -> str | None:
+    """The tokens line, in the Gemini paths' shape: in + thinking + out = total,
+    with the cost when the deployment's price is known."""
     if usage is None:
         return None
     prompt = _field(usage, "prompt_tokens", 0) or 0
@@ -745,7 +762,7 @@ def format_chat_usage(usage) -> str | None:
     if reasoning:
         parts.append(f"{reasoning:,} thinking")
     parts.append(f"{completion - reasoning:,} out")
-    return f"tokens: {' + '.join(parts)} = {total:,} total"
+    return _with_cost(f"tokens: {' + '.join(parts)} = {total:,} total", chat_cost(deployment, usage))
 
 
 def _rate_limit_error(exc, content: list[dict]) -> TubetellError:
@@ -766,8 +783,11 @@ def _rate_limit_error(exc, content: list[dict]) -> TubetellError:
     )
 
 
-def ask(client, cfg: Settings, content: list[dict]) -> tuple[str, int | None]:
-    """One chat request: the answer text and the deployment's token limit."""
+def ask(
+    client, cfg: Settings, content: list[dict], usage: TranscriptionUsage | None = None
+) -> tuple[str, int | None]:
+    """One chat request: the answer text and the deployment's token limit.
+    Its cost is charged to `usage` when given."""
     from openai import RateLimitError
 
     try:
@@ -783,9 +803,11 @@ def ask(client, cfg: Settings, content: list[dict]) -> tuple[str, int | None]:
         raise _api_error(exc) from exc
     limit = token_limit(raw.headers)
     resp = raw.parse()
-    line = format_chat_usage(_field(resp, "usage"))
+    line = format_chat_usage(_field(resp, "usage"), cfg.chat_deployment)
     if line:
         print(line, file=sys.stderr)
+    if usage is not None:
+        usage.charge(chat_cost(cfg.chat_deployment, _field(resp, "usage")))
     choice = (_field(resp, "choices") or [None])[0]
     if choice is not None and _field(choice, "finish_reason") == "length":
         print(
@@ -817,16 +839,19 @@ def probe_limit(client, cfg: Settings) -> int | None:
     return limit
 
 
-def ask_fitted(client, cfg: Settings, text: str, frames: list[Frame], request: str) -> str:
+def ask_fitted(
+    client, cfg: Settings, text: str, frames: list[Frame], request: str, usage: TranscriptionUsage | None = None
+) -> str:
     """The answer, from one request when it fits the deployment's limit, else
-    from one request per batch of frames and a merge of their answers."""
+    from one request per batch of frames and a merge of their answers. Every
+    request's cost is charged to `usage` when given."""
     text_tokens = estimate_request(text, 0)
     limit = None
     if estimate_request(text, len(frames)) > PROBE_ABOVE:
         limit = probe_limit(client, cfg)
     groups = batches(frames, text_tokens=text_tokens, limit=limit)
     if len(groups) == 1:
-        return ask(client, cfg, chat_content(text, groups[0]))[0]
+        return ask(client, cfg, chat_content(text, groups[0]), usage)[0]
     print(
         f"  {len(frames)} frames do not fit one request of {limit:,} tokens per minute; "
         f"sending {len(groups)} requests, then merging.",
@@ -836,9 +861,9 @@ def ask_fitted(client, cfg: Settings, text: str, frames: list[Frame], request: s
     for group in groups:
         span = (group[0].time, group[-1].time)
         print(f"  frames {stamp(span[0])}-{stamp(span[1])}", file=sys.stderr)
-        answers.append(((int(span[0]), int(span[1])), ask(client, cfg, chat_content(text, group))[0]))
+        answers.append(((int(span[0]), int(span[1])), ask(client, cfg, chat_content(text, group), usage)[0]))
     merged = merge_body(request, answers)
-    return ask(client, cfg, [{"type": "text", "text": merged}])[0]
+    return ask(client, cfg, [{"type": "text", "text": merged}], usage)[0]
 
 
 # --- the whole path -------------------------------------------------------------
@@ -890,7 +915,7 @@ def answer(
     if screen_only and not info["video"]:
         raise TubetellError(f"{path.name} has no video stream; --mode screen reads the frames.")
     client = make_client(cfg)
-    usage = TranscriptionUsage()
+    usage = TranscriptionUsage(cfg.transcribe_deployment)
     with tempfile.TemporaryDirectory(prefix="tubetell-azure-") as tmp:
         workdir = Path(tmp)
         segments: list[Segment] = []
@@ -913,7 +938,7 @@ def answer(
         frames = sample_frames(path, span, workdir, fps=fps) if info["video"] else []
         screen = None
         if frames and not raw_frames:
-            observations = screen_pass.observe(client, cfg, path, span, frames, fps=fps)
+            observations = screen_pass.observe(client, cfg, path, span, frames, fps=fps, usage=usage)
             screen = screen_pass.format_observations(observations)
             frames = []
         if screen_only:
@@ -938,4 +963,7 @@ def answer(
             f"asking {cfg.chat_deployment} ({len(segments)} transcript lines, {what})...",
             file=sys.stderr,
         )
-        return ask_fitted(client, cfg, text, frames, request)
+        result = ask_fitted(client, cfg, text, frames, request, usage)
+        if usage.cost is not None:
+            print(f"cost: ≈ {format_usd(usage.cost)} for this run", file=sys.stderr)
+        return result

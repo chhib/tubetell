@@ -285,16 +285,24 @@ and SKU and a higher `--sku-capacity`.
 
 ## Cost
 
-stderr shows what each step used:
+stderr shows what each step used, and what it cost when the deployment's
+price is known:
 
 ```
-transcribed: 3,452 s audio in 3 requests
-tokens: 61,204 in + 1,830 thinking + 2,115 out = 65,149 total
+transcribed: 105,623 tokens in 2 requests ≈ 1.07 USD
+tokens: 61,204 in + 1,830 thinking + 2,115 out = 65,149 total ≈ 0.08 USD
+cost: ≈ 1.15 USD for this run
 ```
 
-Transcription is billed by audio duration; the chat request by tokens, where
-frames are most of the input. `--clip` cuts both; `--fps` with a low rate cuts
-the frames.
+The diarize model is billed by tokens (audio in, text out); `gpt-transcribe`
+by audio duration; the chat request by tokens, where frames are most of the
+input. `--clip` cuts both; `--fps` with a low rate cuts the frames.
+
+The prices are a small table in `src/tubetell/prices.py` (Azure's Sweden
+Central / Global Standard list prices in USD, read 2026-11-06), matched by the
+model name inside the deployment name. A deployment whose model is not in the
+table gets no `≈` and no run total, rather than a wrong number. Update the
+table when prices move.
 
 ## Troubleshooting
 
