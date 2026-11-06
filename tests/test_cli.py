@@ -479,3 +479,18 @@ def test_transcript_flag_is_azure_only(azure_env, monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     with pytest.raises(SystemExit, match="--transcript .*--provider azure"):
         run_main(monkeypatch, ["rec.mov", "--transcript", "fixed.md"])
+
+
+def test_azure_speakers_are_resolved_and_passed(azure_env, tmp_path, monkeypatch):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", "https://x.cognitiveservices.azure.com")
+    seen = {}
+    monkeypatch.setattr(cli.foundry, "answer", lambda path, **kw: seen.update(kw) or "ok")
+    monkeypatch.setattr(cli, "resolve_speakers", lambda flags, path: [f"ref:{f}" for f in flags])
+    run_main(monkeypatch, ["rec.mov", "--provider", "azure", "--speaker", "Ada=0:01-0:09", "--speaker", "Bob"])
+    assert seen["speakers"] == ["ref:Ada=0:01-0:09", "ref:Bob"]
+
+
+def test_speaker_flag_is_azure_only(azure_env, monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    with pytest.raises(SystemExit, match="--speaker .*--provider azure"):
+        run_main(monkeypatch, ["rec.mov", "--speaker", "Ada"])

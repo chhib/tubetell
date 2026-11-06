@@ -77,6 +77,8 @@ class Transcript:
     span: tuple[float, float]
     deployment: str | None
     segments: list[Segment]
+    # What else shaped the transcript (known speaker names); part of the key.
+    tag: str = ""
 
     def covers(self, span: tuple[float, float]) -> bool:
         return self.span[0] <= span[0] and span[1] <= self.span[1]
@@ -87,6 +89,7 @@ class Transcript:
             "source": self.source,
             "span": list(self.span),
             "deployment": self.deployment,
+            "tag": self.tag,
             "segments": [asdict(s) for s in self.segments],
         }
         path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -99,6 +102,7 @@ class Transcript:
                 source=data["source"],
                 span=(float(data["span"][0]), float(data["span"][1])),
                 deployment=data.get("deployment"),
+                tag=data.get("tag") or "",
                 segments=[
                     Segment(float(s["start"]), float(s["end"]), s["speaker"], s["text"])
                     for s in data["segments"]
@@ -146,6 +150,11 @@ def load_file(path: Path) -> Transcript:
     segments = parse_text(path.read_text(encoding="utf-8"))
     span = (segments[0].start, segments[-1].end)
     return Transcript(source=path.name, span=span, deployment=None, segments=segments)
+
+
+def is_named(segments: list[Segment]) -> bool:
+    """Whether any label is a name rather than a generic `Speaker ...` one."""
+    return any(not s.speaker.startswith("Speaker ") for s in segments)
 
 
 def is_multipart(segments: list[Segment]) -> bool:
