@@ -485,7 +485,7 @@ def pipeline(monkeypatch, tmp_path):
 
     observed = []
 
-    def observe(client, cfg, src, span, frames, *, fps):
+    def observe(client, cfg, src, span, frames, *, fps, usage=None):
         observed.append(len(frames))
         return [screen.Observation(f.time, "a dashboard", "Revenue 12.3", "nothing") for f in frames]
 
@@ -731,7 +731,7 @@ def test_glossary_corrects_before_caching_and_keys_the_cache(cached_pipeline, mo
     corrected = []
     monkeypatch.setattr(
         glossary, "correct",
-        lambda client, cfg, segments, terms: corrected.append(terms)
+        lambda client, cfg, segments, terms, usage=None: corrected.append(terms)
         or [Segment(s.start, s.end, s.speaker, s.text.replace("joining", "Kiana")) for s in segments],
     )
     out = _run(cached_pipeline, glossary_terms=["Kiana"])
@@ -886,3 +886,40 @@ def test_answer_probes_the_limit_and_sends_frames_in_batches_then_merges(pipelin
     images = [sum(1 for c in call["messages"][0]["content"] if c["type"] == "image_url") for call in calls]
     assert images == [0, 2, 2, 1, 0]
     assert "[span 0:00-0:01]" in calls[4]["messages"][0]["content"][0]["text"]
+
+
+# --- cost -------------------------------------------------------------------------------
+
+
+def test_transcription_usage_line_shows_the_cost_when_the_price_is_known():
+    usage = TranscriptionUsage("gpt-transcribe")
+    usage.add({"type": "duration", "seconds": 1200})
+    assert usage.line() == "transcribed: 1,200 s audio in 1 request ≈ 0.09 USD"
+    assert usage.cost == pytest.approx(0.09)
+    unknown = TranscriptionUsage("mystery-stt")
+    unknown.add({"type": "duration", "seconds": 1200})
+    assert unknown.line() == "transcribed: 1,200 s audio in 1 request"
+    assert unknown.cost is None
+
+
+def test_chat_usage_line_shows_the_cost_and_the_run_total(monkeypatch, capsys):
+    monkeypatch.setenv("AZURE_OPENAI_ENDPOINT", ENDPOINT)
+    usage = {"prompt_tokens": 100_000, "completion_tokens": 2_000, "total_tokens": 102_000}
+    assert format_chat_usage(usage, "gpt-6.1-terra") == (
+        "tokens: 100,000 in + 2,000 out = 102,000 total ≈ 0.11 USD"
+    )
+    assert format_chat_usage(usage, "mystery") == "tokens: 100,000 in + 2,000 out = 102,000 total"
+
+
+def test_answer_prints_the_run_cost(pipeline, monkeypatch, capsys):
+    monkeypatch.setattr(
+        foundry, "transcribe",
+        lambda client, cfg, path, span, workdir, usage, speakers=(): usage.add(
+            {"type": "duration", "seconds": 300}
+        ) or [],
+    )
+    monkeypatch.setenv("AZURE_OPENAI_TRANSCRIBE_DEPLOYMENT", "gpt-transcribe")
+    foundry.answer(pipeline.src, mode="summary", prompt=None, model=None, clip=None, fps=None, description=None)
+    err = capsys.readouterr().err
+    assert "transcribed: 300 s audio in 1 request ≈ 0.02 USD" in err
+    assert "cost: ≈ 0.02 USD for this run" in err

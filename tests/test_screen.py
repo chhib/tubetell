@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from tubetell.foundry import Frame, settings
+from tubetell.foundry import Frame, TranscriptionUsage, settings
 from tubetell.screen import (
     Observation,
     batches,
@@ -107,8 +107,10 @@ def test_observe_sends_batches_and_caches(monkeypatch, tmp_path, capsys):
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(with_raw_response=SimpleNamespace(
         create=lambda **kw: SimpleNamespace(headers={}, parse=lambda: create(**kw))
     ))))
-    obs = screen.observe(client, settings(), src, (0.0, 30.0), frames, fps=None)
+    usage = TranscriptionUsage()
+    obs = screen.observe(client, settings(), src, (0.0, 30.0), frames, fps=None, usage=usage)
     assert len(calls) == 2
+    assert usage.cost is not None and usage.cost > 0  # both requests charged to the run
     assert [o.time for o in obs] == [0.0, 10.0, 20.0]
     assert obs[2].shown == "pic [frame 00:20]"
     again = screen.observe(client, settings(), src, (0.0, 30.0), frames, fps=None)

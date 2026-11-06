@@ -121,8 +121,9 @@ def format_observations(observations: list[Observation]) -> str:
     return "\n".join(lines)
 
 
-def observe(client, cfg, src: Path, span: tuple[float, float], frames: list, *, fps: float | None) -> list[Observation]:
-    """The screen pass over these frames, from the cache when it has run before."""
+def observe(client, cfg, src: Path, span: tuple[float, float], frames: list, *, fps: float | None, usage=None) -> list[Observation]:
+    """The screen pass over these frames, from the cache when it has run before.
+    Each request's cost is charged to `usage` when given."""
     from .foundry import ask, chat_content
 
     path = screen_cache_path(src, span, cfg.chat_deployment, fps=fps)
@@ -138,7 +139,7 @@ def observe(client, cfg, src: Path, span: tuple[float, float], frames: list, *, 
     )
     observations: list[Observation] = []
     for group in groups:
-        answer = ask(client, cfg, chat_content(screen_request(group), group))[0]
+        answer = ask(client, cfg, chat_content(screen_request(group), group), usage)[0]
         observations.extend(parse_answer(answer, [f.time for f in group]))
     save(path, observations)
     print(f"screen: saved to {path}", file=sys.stderr)

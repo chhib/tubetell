@@ -115,14 +115,15 @@ def _parse(answer: str) -> list[dict] | None:
     return changes if isinstance(changes, list) else None
 
 
-def correct(client, cfg, segments: list[Segment], terms: list[str]) -> list[Segment]:
-    """The transcript with glossary terms restored, after one chat request."""
+def correct(client, cfg, segments: list[Segment], terms: list[str], usage=None) -> list[Segment]:
+    """The transcript with glossary terms restored, after one chat request
+    (charged to `usage` when given)."""
     from .foundry import ask
 
     if not segments:
         return segments
     print(f"glossary: checking {len(segments)} lines against {len(terms)} terms...", file=sys.stderr)
-    answer = ask(client, cfg, [{"type": "text", "text": correction_request(segments, terms)}])[0]
+    answer = ask(client, cfg, [{"type": "text", "text": correction_request(segments, terms)}], usage)[0]
     changes = _parse(answer)
     if changes is None:
         print("glossary: the model's answer was not JSON; transcript left as it is", file=sys.stderr)
